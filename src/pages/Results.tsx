@@ -5,7 +5,6 @@ import { Footer } from "@/components/Footer";
 import { ScrollReveal } from "@/components/ScrollReveal";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/integrations/supabase/client";
 import {
   Heart,
@@ -19,8 +18,6 @@ import {
   User,
   Shirt,
   Eye,
-  ChevronLeft,
-  ChevronRight,
 } from "lucide-react";
 
 interface OutfitItem {
@@ -28,7 +25,7 @@ interface OutfitItem {
   brand: string;
   price: string;
   category: string;
-  clothingDescription: string;
+  styleImageUrl: string;
 }
 
 interface Outfit {
@@ -39,6 +36,7 @@ interface Outfit {
   items: OutfitItem[];
 }
 
+// Real clothing image URLs from freely available sources
 const mockOutfits: Outfit[] = [
   {
     id: 1,
@@ -46,9 +44,27 @@ const mockOutfits: Outfit[] = [
     occasion: "Formal",
     colors: ["#0f766e", "#d4af37", "#1e293b"],
     items: [
-      { name: "Teal Silk Blazer", brand: "H&M", price: "₹3,499", category: "Outerwear", clothingDescription: "teal silk blazer formal elegant fitted" },
-      { name: "Gold Satin Skirt", brand: "Zara", price: "₹2,799", category: "Bottoms", clothingDescription: "gold satin midi skirt formal" },
-      { name: "Black Heeled Boots", brand: "Aldo", price: "₹5,999", category: "Footwear", clothingDescription: "black heeled ankle boots leather" },
+      {
+        name: "Teal Silk Blazer",
+        brand: "H&M",
+        price: "₹3,499",
+        category: "Outerwear",
+        styleImageUrl: "https://images.unsplash.com/photo-1591047139829-d91aecb6caea?w=400&q=80",
+      },
+      {
+        name: "Gold Satin Skirt",
+        brand: "Zara",
+        price: "₹2,799",
+        category: "Bottoms",
+        styleImageUrl: "https://images.unsplash.com/photo-1583496661160-fb5886a0aaaa?w=400&q=80",
+      },
+      {
+        name: "Black Heeled Boots",
+        brand: "Aldo",
+        price: "₹5,999",
+        category: "Footwear",
+        styleImageUrl: "https://images.unsplash.com/photo-1543163521-1bf539c55dd2?w=400&q=80",
+      },
     ],
   },
   {
@@ -57,9 +73,27 @@ const mockOutfits: Outfit[] = [
     occasion: "Business",
     colors: ["#334155", "#14b8a6", "#f8fafc"],
     items: [
-      { name: "Navy Chino Trousers", brand: "Uniqlo", price: "₹2,990", category: "Bottoms", clothingDescription: "navy chino trousers slim fit" },
-      { name: "Teal Knit Polo", brand: "Mango", price: "₹1,999", category: "Tops", clothingDescription: "teal knit polo shirt smart casual" },
-      { name: "White Minimal Sneakers", brand: "Adidas", price: "₹4,299", category: "Footwear", clothingDescription: "white minimal leather sneakers clean" },
+      {
+        name: "Navy Chino Trousers",
+        brand: "Uniqlo",
+        price: "₹2,990",
+        category: "Bottoms",
+        styleImageUrl: "https://images.unsplash.com/photo-1624378439575-d8705ad7ae80?w=400&q=80",
+      },
+      {
+        name: "Teal Knit Polo",
+        brand: "Mango",
+        price: "₹1,999",
+        category: "Tops",
+        styleImageUrl: "https://images.unsplash.com/photo-1625910513413-5fc42af57706?w=400&q=80",
+      },
+      {
+        name: "White Minimal Sneakers",
+        brand: "Adidas",
+        price: "₹4,299",
+        category: "Footwear",
+        styleImageUrl: "https://images.unsplash.com/photo-1549298916-b41d501d3772?w=400&q=80",
+      },
     ],
   },
   {
@@ -68,14 +102,32 @@ const mockOutfits: Outfit[] = [
     occasion: "Casual",
     colors: ["#d4af37", "#0f766e", "#f1f5f9"],
     items: [
-      { name: "Olive Linen Shirt", brand: "Muji", price: "₹2,490", category: "Tops", clothingDescription: "olive green linen shirt relaxed fit" },
-      { name: "Cream Wide-Leg Pants", brand: "COS", price: "₹3,990", category: "Bottoms", clothingDescription: "cream wide leg linen pants relaxed" },
-      { name: "Tan Leather Sandals", brand: "Birkenstock", price: "₹6,500", category: "Footwear", clothingDescription: "tan leather flat sandals casual" },
+      {
+        name: "Olive Linen Shirt",
+        brand: "Muji",
+        price: "₹2,490",
+        category: "Tops",
+        styleImageUrl: "https://images.unsplash.com/photo-1596755094514-f87e34085b2c?w=400&q=80",
+      },
+      {
+        name: "Cream Wide-Leg Pants",
+        brand: "COS",
+        price: "₹3,990",
+        category: "Bottoms",
+        styleImageUrl: "https://images.unsplash.com/photo-1594938298603-c8148c4dae35?w=400&q=80",
+      },
+      {
+        name: "Tan Leather Sandals",
+        brand: "Birkenstock",
+        price: "₹6,500",
+        category: "Footwear",
+        styleImageUrl: "https://images.unsplash.com/photo-1603487742131-4160ec999306?w=400&q=80",
+      },
     ],
   },
 ];
 
-type TryOnStatus = "idle" | "loading" | "done" | "error";
+type TryOnStatus = "idle" | "uploading" | "loading" | "done" | "error";
 
 interface TryOnResult {
   imageUrl: string;
@@ -93,25 +145,60 @@ const PROCESSING_STEPS = [
 const Results = () => {
   const location = useLocation();
   const formData = location.state?.form;
-  const userImage = location.state?.imagePreview;
+  const userImage = location.state?.imagePreview; // base64 data URI
 
+  const [userImageUrl, setUserImageUrl] = useState<string | null>(null);
   const [tryOnResults, setTryOnResults] = useState<Record<string, TryOnResult>>({});
   const [activeOutfitId, setActiveOutfitId] = useState<number | null>(null);
   const [processingStep, setProcessingStep] = useState(0);
   const [selectedItemIndex, setSelectedItemIndex] = useState<Record<number, number>>({});
 
-  // Auto-trigger try-on for the first outfit's first item
+  // Upload user image to storage on mount
   useEffect(() => {
-    if (userImage && mockOutfits.length > 0) {
+    if (!userImage) return;
+
+    const uploadImage = async () => {
+      try {
+        // Convert base64 to blob
+        const res = await fetch(userImage);
+        const blob = await res.blob();
+        const fileName = `tryon-${Date.now()}.jpg`;
+
+        const { data, error } = await supabase.storage
+          .from("user-images")
+          .upload(fileName, blob, { contentType: "image/jpeg", upsert: true });
+
+        if (error) {
+          console.error("Upload error:", error);
+          return;
+        }
+
+        const { data: urlData } = supabase.storage
+          .from("user-images")
+          .getPublicUrl(data.path);
+
+        console.log("Uploaded user image:", urlData.publicUrl);
+        setUserImageUrl(urlData.publicUrl);
+      } catch (err) {
+        console.error("Failed to upload user image:", err);
+      }
+    };
+
+    uploadImage();
+  }, [userImage]);
+
+  // Auto-trigger try-on for first outfit once image is uploaded
+  useEffect(() => {
+    if (userImageUrl && mockOutfits.length > 0) {
       const firstOutfit = mockOutfits[0];
       const firstItem = firstOutfit.items[0];
       handleTryOn(firstOutfit.id, firstItem, 0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [userImageUrl]);
 
   const handleTryOn = async (outfitId: number, item: OutfitItem, itemIdx: number) => {
-    if (!userImage) return;
+    if (!userImageUrl) return;
 
     const key = `${outfitId}-${itemIdx}`;
     setActiveOutfitId(outfitId);
@@ -119,16 +206,20 @@ const Results = () => {
     setTryOnResults((prev) => ({ ...prev, [key]: { imageUrl: "", status: "loading" } }));
     setProcessingStep(0);
 
-    // Simulate processing steps
     const stepInterval = setInterval(() => {
       setProcessingStep((prev) => Math.min(prev + 1, PROCESSING_STEPS.length - 1));
     }, 1500);
 
     try {
+      console.log("Invoking virtual-tryon with:", {
+        imageUrl: userImageUrl,
+        styleImageUrl: item.styleImageUrl,
+      });
+
       const { data, error } = await supabase.functions.invoke("virtual-tryon", {
         body: {
-          userImageBase64: userImage,
-          clothingDescription: item.clothingDescription,
+          imageUrl: userImageUrl,
+          styleImageUrl: item.styleImageUrl,
         },
       });
 
@@ -136,7 +227,18 @@ const Results = () => {
 
       if (error) throw error;
 
-      const outputUrl = data?.result?.output?.[0]?.url || data?.result?.output || "";
+      console.log("Virtual try-on response:", JSON.stringify(data));
+
+      // LightX returns output as a URL string in result.output
+      const outputUrl =
+        data?.result?.output ||
+        data?.result?.output?.[0]?.url ||
+        data?.result?.output?.[0] ||
+        "";
+
+      if (!outputUrl) {
+        throw new Error("No output image received from try-on API");
+      }
 
       setTryOnResults((prev) => ({
         ...prev,
@@ -177,6 +279,14 @@ const Results = () => {
               </div>
             </div>
           </ScrollReveal>
+
+          {/* Upload status */}
+          {userImage && !userImageUrl && (
+            <div className="flex items-center gap-3 mb-6 p-4 bg-muted/50 rounded-xl border border-border/50">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              <p className="text-sm">Preparing your photo for try-on…</p>
+            </div>
+          )}
 
           {/* Outfit Cards with Try-On */}
           <div className="space-y-10">
@@ -293,7 +403,9 @@ const Results = () => {
                                     className="w-32 h-40 object-cover rounded-xl mx-auto mb-4 opacity-50"
                                   />
                                   <p className="text-sm text-muted-foreground mb-3">
-                                    Select an item to try on
+                                    {userImageUrl
+                                      ? "Select an item to try on"
+                                      : "Uploading your photo…"}
                                   </p>
                                 </>
                               ) : (
@@ -322,26 +434,22 @@ const Results = () => {
                               <button
                                 key={item.name}
                                 onClick={() => handleTryOn(outfit.id, item, idx)}
-                                disabled={itemTryOn?.status === "loading"}
+                                disabled={!userImageUrl || itemTryOn?.status === "loading"}
                                 className={`w-full text-left bg-muted/30 rounded-xl p-4 border transition-all duration-200 active:scale-[0.97] ${
                                   isSelected
                                     ? "border-primary shadow-md ring-1 ring-primary/20"
                                     : "border-border/50 hover:border-primary/30"
-                                } ${itemTryOn?.status === "loading" ? "opacity-60 cursor-wait" : ""}`}
+                                } ${itemTryOn?.status === "loading" ? "opacity-60 cursor-wait" : ""} ${
+                                  !userImageUrl ? "opacity-50 cursor-not-allowed" : ""
+                                }`}
                               >
                                 <div className="flex items-center gap-4">
-                                  <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
-                                    {itemTryOn?.status === "done" && itemTryOn.imageUrl ? (
-                                      <img
-                                        src={itemTryOn.imageUrl}
-                                        alt={item.name}
-                                        className="w-full h-full object-cover rounded-lg"
-                                      />
-                                    ) : itemTryOn?.status === "loading" ? (
-                                      <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                                    ) : (
-                                      <ShoppingBag className="h-5 w-5 text-muted-foreground/40" />
-                                    )}
+                                  <div className="w-16 h-16 rounded-lg bg-muted overflow-hidden flex-shrink-0">
+                                    <img
+                                      src={item.styleImageUrl}
+                                      alt={item.name}
+                                      className="w-full h-full object-cover"
+                                    />
                                   </div>
                                   <div className="flex-1 min-w-0">
                                     <p className="text-xs text-muted-foreground">{item.category}</p>
