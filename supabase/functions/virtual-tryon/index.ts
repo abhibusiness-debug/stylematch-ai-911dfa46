@@ -17,45 +17,36 @@ serve(async (req) => {
       throw new Error("LIGHTX_API_KEY is not configured");
     }
 
-    const { userImageBase64, clothingDescription, clothingImageUrl } = await req.json();
+    const { imageUrl, styleImageUrl } = await req.json();
 
-    if (!userImageBase64) {
+    if (!imageUrl) {
       return new Response(
-        JSON.stringify({ error: "User image is required" }),
+        JSON.stringify({ error: "User image URL is required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    if (!clothingDescription && !clothingImageUrl) {
+    if (!styleImageUrl) {
       return new Response(
-        JSON.stringify({ error: "Clothing description or image URL is required" }),
+        JSON.stringify({ error: "Clothing image URL is required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    console.log("Calling LightX API with imageUrl:", imageUrl.substring(0, 80), "styleImageUrl:", styleImageUrl.substring(0, 80));
 
     // Step 1: Initiate virtual try-on with LightX API
-    const body: Record<string, string> = {
-      imageUrl: userImageBase64.startsWith("data:")
-        ? userImageBase64
-        : `data:image/jpeg;base64,${userImageBase64}`,
-    };
-
-    if (clothingImageUrl) {
-      body.clothImageUrl = clothingImageUrl;
-    } else {
-      body.clothDescription = clothingDescription;
-    }
-
     const response = await fetch("https://api.lightxeditor.com/external/api/v2/aivirtualtryon", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "x-api-key": LIGHTX_API_KEY,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ imageUrl, styleImageUrl }),
     });
 
     const data = await response.json();
+    console.log("LightX initial response:", JSON.stringify(data));
 
     if (!response.ok) {
       console.error("LightX API error:", JSON.stringify(data));
@@ -66,8 +57,9 @@ serve(async (req) => {
     const orderId = data.body?.orderId;
 
     if (!orderId) {
-      // If result is immediate
-      return new Response(JSON.stringify({ result: data }), {
+      // If result is immediate, try to extract output
+      const output = data.body?.output;
+      return new Response(JSON.stringify({ result: { output } }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -90,6 +82,7 @@ serve(async (req) => {
       );
 
       const pollData = await pollRes.json();
+      console.log(`Poll attempt ${i + 1}:`, JSON.stringify(pollData));
       const status = pollData.body?.status;
 
       if (status === "active") {
