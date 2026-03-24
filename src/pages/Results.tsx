@@ -1,5 +1,5 @@
 import { useLocation, Link } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { ScrollReveal } from "@/components/ScrollReveal";
@@ -9,7 +9,6 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   Heart,
   ShoppingBag,
-  ExternalLink,
   ArrowLeft,
   Palette,
   Sparkles,
@@ -19,6 +18,8 @@ import {
   Shirt,
   Eye,
   Brain,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 
 interface OutfitItem {
@@ -27,6 +28,7 @@ interface OutfitItem {
   price: string;
   category: string;
   searchQuery: string;
+  generatedImageUrl?: string;
 }
 
 interface Outfit {
@@ -37,26 +39,18 @@ interface Outfit {
   items: OutfitItem[];
 }
 
-type TryOnStatus = "idle" | "uploading" | "loading" | "done" | "error";
+type PipelineStage =
+  | "generating-outfits"
+  | "generating-images"
+  | "trying-on"
+  | "done"
+  | "error";
 
-interface TryOnResult {
-  imageUrl: string;
-  status: TryOnStatus;
-  error?: string;
-}
-
-const GENERATION_STEPS = [
-  { label: "Analyzing your profile", icon: User },
-  { label: "AI styling your body type", icon: Brain },
-  { label: "Matching colors to skin tone", icon: Palette },
-  { label: "Curating personalized outfits", icon: Sparkles },
-];
-
-const TRYON_STEPS = [
-  { label: "Uploading your photo", icon: User },
-  { label: "Analyzing body proportions", icon: Eye },
-  { label: "Fitting clothing to your body", icon: Shirt },
-  { label: "Rendering final look", icon: Sparkles },
+const PIPELINE_STEPS = [
+  { key: "generating-outfits", label: "AI is analyzing your style profile", icon: Brain },
+  { key: "generating-images", label: "Creating outfit visuals", icon: Shirt },
+  { key: "trying-on", label: "Fitting outfits onto your body", icon: Eye },
+  { key: "done", label: "Your styled looks are ready!", icon: Sparkles },
 ];
 
 const Results = () => {
@@ -65,160 +59,173 @@ const Results = () => {
   const userImage = location.state?.imagePreview;
 
   const [outfits, setOutfits] = useState<Outfit[]>([]);
-  const [generationStatus, setGenerationStatus] = useState<"loading" | "done" | "error">("loading");
-  const [generationError, setGenerationError] = useState("");
-  const [genStep, setGenStep] = useState(0);
-
+  const [stage, setStage] = useState<PipelineStage>("generating-outfits");
+  const [errorMsg, setErrorMsg] = useState("");
   const [userImageUrl, setUserImageUrl] = useState<string | null>(null);
-  const [tryOnResults, setTryOnResults] = useState<Record<string, TryOnResult>>({});
-  const [activeOutfitId, setActiveOutfitId] = useState<number | null>(null);
-  const [tryOnStep, setTryOnStep] = useState(0);
-  const [selectedItemIndex, setSelectedItemIndex] = useState<Record<number, number>>({});
-
-  // Generate outfits via AI on mount
-  useEffect(() => {
-    if (!formData) return;
-
-    const generate = async () => {
-      const stepInterval = setInterval(() => {
-        setGenStep((prev) => Math.min(prev + 1, GENERATION_STEPS.length - 1));
-      }, 2000);
-
-      try {
-        const { data, error } = await supabase.functions.invoke("generate-outfits", {
-          body: formData,
-        });
-
-        clearInterval(stepInterval);
-
-        if (error) throw error;
-        if (data?.error) throw new Error(data.error);
-
-        const generated = data?.outfits;
-        if (!Array.isArray(generated) || generated.length === 0) {
-          throw new Error("No outfits were generated");
-        }
-
-        setOutfits(generated);
-        setGenerationStatus("done");
-      } catch (err: unknown) {
-        clearInterval(stepInterval);
-        const msg = err instanceof Error ? err.message : "Failed to generate outfits";
-        console.error("Generation error:", msg);
-        setGenerationError(msg);
-        setGenerationStatus("error");
-      }
-    };
-
-    generate();
-  }, [formData]);
-
-  // Upload user image to storage
-  useEffect(() => {
-    if (!userImage) return;
-
-    const uploadImage = async () => {
-      try {
-        const res = await fetch(userImage);
-        const blob = await res.blob();
-        const fileName = `tryon-${Date.now()}.jpg`;
-
-        const { data, error } = await supabase.storage
-          .from("user-images")
-          .upload(fileName, blob, { contentType: "image/jpeg", upsert: true });
-
-        if (error) {
-          console.error("Upload error:", error);
-          return;
-        }
-
-        const { data: urlData } = supabase.storage
-          .from("user-images")
-          .getPublicUrl(data.path);
-
-        setUserImageUrl(urlData.publicUrl);
-      } catch (err) {
-        console.error("Failed to upload user image:", err);
-      }
-    };
-
-    uploadImage();
-  }, [userImage]);
-
-  const handleTryOn = async (outfitId: number, item: OutfitItem, itemIdx: number) => {
-    if (!userImageUrl) return;
-
-    const key = `${outfitId}-${itemIdx}`;
-    setActiveOutfitId(outfitId);
-    setSelectedItemIndex((prev) => ({ ...prev, [outfitId]: itemIdx }));
-    setTryOnResults((prev) => ({ ...prev, [key]: { imageUrl: "", status: "loading" } }));
-    setTryOnStep(0);
-
-    const stepInterval = setInterval(() => {
-      setTryOnStep((prev) => Math.min(prev + 1, TRYON_STEPS.length - 1));
-    }, 1500);
-
-    try {
-      const { data, error } = await supabase.functions.invoke("virtual-tryon", {
-        body: {
-          imageUrl: userImageUrl,
-          clothDescription: `${item.name} by ${item.brand}`,
-        },
-      });
-
-      clearInterval(stepInterval);
-      if (error) throw error;
-
-      const outputUrl =
-        data?.result?.output ||
-        data?.result?.output?.[0]?.url ||
-        data?.result?.output?.[0] ||
-        "";
-
-      if (!outputUrl) throw new Error("No output image received");
-
-      setTryOnResults((prev) => ({
-        ...prev,
-        [key]: { imageUrl: outputUrl, status: "done" },
-      }));
-    } catch (err: unknown) {
-      clearInterval(stepInterval);
-      const msg = err instanceof Error ? err.message : "Try-on failed";
-      setTryOnResults((prev) => ({
-        ...prev,
-        [key]: { imageUrl: "", status: "error", error: msg },
-      }));
-    }
-  };
+  const [tryOnImages, setTryOnImages] = useState<Record<number, string>>({});
+  const [activeOutfit, setActiveOutfit] = useState(0);
+  const [progress, setProgress] = useState(5);
+  const pipelineRan = useRef(false);
 
   const getAffiliateUrl = (query: string) =>
     `https://www.amazon.in/s?k=${encodeURIComponent(query)}`;
 
-  // Loading state while AI generates outfits
-  if (generationStatus === "loading") {
+  // Full pipeline: generate outfits → generate images → try-on
+  useEffect(() => {
+    if (!formData || !userImage || pipelineRan.current) return;
+    pipelineRan.current = true;
+
+    const run = async () => {
+      try {
+        // --- Stage 1: Upload user image ---
+        setProgress(5);
+        const imgRes = await fetch(userImage);
+        const blob = await imgRes.blob();
+        const fileName = `tryon-${Date.now()}.jpg`;
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from("user-images")
+          .upload(fileName, blob, { contentType: "image/jpeg", upsert: true });
+        if (uploadErr) throw new Error("Failed to upload your photo");
+        const { data: urlData } = supabase.storage
+          .from("user-images")
+          .getPublicUrl(uploadData.path);
+        const uploadedUserUrl = urlData.publicUrl;
+        setUserImageUrl(uploadedUserUrl);
+        setProgress(10);
+
+        // --- Stage 2: Generate outfits ---
+        setStage("generating-outfits");
+        const { data: outfitData, error: outfitErr } = await supabase.functions.invoke(
+          "generate-outfits",
+          { body: formData }
+        );
+        if (outfitErr) throw outfitErr;
+        if (outfitData?.error) throw new Error(outfitData.error);
+        const generated: Outfit[] = outfitData?.outfits;
+        if (!Array.isArray(generated) || generated.length === 0)
+          throw new Error("No outfits generated");
+        setOutfits(generated);
+        setProgress(30);
+
+        // --- Stage 3: Generate clothing images ---
+        setStage("generating-images");
+        const updatedOutfits = [...generated];
+
+        // Generate images for the key item (first item) of each outfit
+        const imagePromises = generated.map(async (outfit, oi) => {
+          // Pick the main garment (top/shirt category, or first item)
+          const mainItem =
+            outfit.items.find(
+              (it) =>
+                it.category.toLowerCase().includes("top") ||
+                it.category.toLowerCase().includes("shirt") ||
+                it.category.toLowerCase().includes("dress")
+            ) || outfit.items[0];
+
+          try {
+            const { data, error } = await supabase.functions.invoke(
+              "generate-clothing-image",
+              {
+                body: {
+                  description: `${mainItem.name} by ${mainItem.brand} - ${mainItem.category}`,
+                  outfitId: outfit.id,
+                  itemIndex: 0,
+                },
+              }
+            );
+            if (!error && data?.imageUrl) {
+              // Assign to all items for simplicity; main item gets the image
+              updatedOutfits[oi] = {
+                ...updatedOutfits[oi],
+                items: updatedOutfits[oi].items.map((item, ii) =>
+                  ii === outfit.items.indexOf(mainItem)
+                    ? { ...item, generatedImageUrl: data.imageUrl }
+                    : item
+                ),
+              };
+            }
+          } catch (e) {
+            console.error(`Failed to generate image for outfit ${outfit.id}:`, e);
+          }
+          setProgress(30 + ((oi + 1) / generated.length) * 30);
+        });
+
+        await Promise.all(imagePromises);
+        setOutfits(updatedOutfits);
+        setProgress(60);
+
+        // --- Stage 4: Virtual try-on for each outfit ---
+        setStage("trying-on");
+        const tryOnPromises = updatedOutfits.map(async (outfit, oi) => {
+          // Find item with generated image
+          const itemWithImage = outfit.items.find((it) => it.generatedImageUrl);
+          if (!itemWithImage?.generatedImageUrl) return;
+
+          try {
+            const { data, error } = await supabase.functions.invoke("virtual-tryon", {
+              body: {
+                imageUrl: uploadedUserUrl,
+                styleImageUrl: itemWithImage.generatedImageUrl,
+              },
+            });
+            if (!error && data) {
+              const outputUrl =
+                data?.result?.output ||
+                data?.result?.output?.[0]?.url ||
+                data?.result?.output?.[0] ||
+                "";
+              if (outputUrl) {
+                setTryOnImages((prev) => ({ ...prev, [outfit.id]: outputUrl }));
+              }
+            }
+          } catch (e) {
+            console.error(`Try-on failed for outfit ${outfit.id}:`, e);
+          }
+          setProgress(60 + ((oi + 1) / updatedOutfits.length) * 35);
+        });
+
+        await Promise.all(tryOnPromises);
+        setProgress(100);
+        setStage("done");
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "Something went wrong";
+        console.error("Pipeline error:", msg);
+        setErrorMsg(msg);
+        setStage("error");
+      }
+    };
+
+    run();
+  }, [formData, userImage]);
+
+  const currentStageIdx = PIPELINE_STEPS.findIndex((s) => s.key === stage);
+
+  // Loading / processing state
+  if (stage !== "done" && stage !== "error") {
     return (
       <div className="min-h-screen">
         <Navbar />
         <div className="pt-24 pb-20 flex items-center justify-center min-h-[80vh]">
-          <div className="max-w-md w-full mx-auto px-4 space-y-8 text-center">
+          <div className="max-w-lg w-full mx-auto px-4 space-y-8 text-center">
             <div>
               <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-6" />
               <h2 className="text-2xl font-bold mb-2">
-                Creating Your <span className="gradient-text-primary">Perfect Outfits</span>
+                Styling Your <span className="gradient-text-primary">Perfect Look</span>
               </h2>
               <p className="text-muted-foreground text-sm">
-                Our AI is analyzing your profile and curating personalized looks…
+                This takes about 1–2 minutes. We're generating outfits and fitting them to your body.
               </p>
             </div>
-            <Progress value={((genStep + 1) / GENERATION_STEPS.length) * 100} className="h-2" />
+            <Progress value={progress} className="h-2" />
+            <p className="text-xs text-muted-foreground">{Math.round(progress)}% complete</p>
             <div className="space-y-2">
-              {GENERATION_STEPS.map((step, idx) => {
+              {PIPELINE_STEPS.map((step, idx) => {
                 const Icon = step.icon;
-                const isDone = idx < genStep;
-                const isCurrent = idx === genStep;
+                const isDone = idx < currentStageIdx;
+                const isCurrent = idx === currentStageIdx;
                 return (
                   <div
-                    key={step.label}
+                    key={step.key}
                     className={`flex items-center gap-3 text-sm rounded-lg px-4 py-2.5 transition-all duration-300 ${
                       isCurrent
                         ? "bg-primary/10 text-primary font-medium"
@@ -227,12 +234,45 @@ const Results = () => {
                         : "text-muted-foreground/40"
                     }`}
                   >
-                    <Icon className="h-4 w-4 flex-shrink-0" />
+                    {isCurrent ? (
+                      <Loader2 className="h-4 w-4 animate-spin flex-shrink-0" />
+                    ) : (
+                      <Icon className="h-4 w-4 flex-shrink-0" />
+                    )}
                     {step.label}
                   </div>
                 );
               })}
             </div>
+
+            {/* Show partial results as they come in */}
+            {outfits.length > 0 && (
+              <div className="mt-6 text-left">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                  Outfits being prepared:
+                </p>
+                {outfits.map((o) => (
+                  <div
+                    key={o.id}
+                    className="flex items-center gap-3 text-sm rounded-lg px-4 py-2 bg-muted/30 mb-1"
+                  >
+                    <div className="flex gap-1">
+                      {o.colors.map((c) => (
+                        <span
+                          key={c}
+                          className="h-3 w-3 rounded-full border border-border"
+                          style={{ backgroundColor: c }}
+                        />
+                      ))}
+                    </div>
+                    <span className="font-medium">{o.name}</span>
+                    {tryOnImages[o.id] && (
+                      <Sparkles className="h-3 w-3 text-primary ml-auto" />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
         <Footer />
@@ -241,7 +281,7 @@ const Results = () => {
   }
 
   // Error state
-  if (generationStatus === "error") {
+  if (stage === "error") {
     return (
       <div className="min-h-screen">
         <Navbar />
@@ -250,8 +290,8 @@ const Results = () => {
             <div className="bg-destructive/10 rounded-full p-4 w-fit mx-auto">
               <RotateCcw className="h-8 w-8 text-destructive" />
             </div>
-            <h2 className="text-2xl font-bold">Generation Failed</h2>
-            <p className="text-sm text-muted-foreground">{generationError}</p>
+            <h2 className="text-2xl font-bold">Something Went Wrong</h2>
+            <p className="text-sm text-muted-foreground">{errorMsg}</p>
             <div className="flex gap-3 justify-center">
               <Button variant="outline" asChild>
                 <Link to="/generator">
@@ -269,6 +309,10 @@ const Results = () => {
     );
   }
 
+  // ===== Done: Show results =====
+  const outfit = outfits[activeOutfit];
+  const tryOnImage = outfit ? tryOnImages[outfit.id] : null;
+
   return (
     <div className="min-h-screen">
       <Navbar />
@@ -283,7 +327,7 @@ const Results = () => {
               </Button>
               <div>
                 <h1 className="text-3xl font-bold">
-                  Your <span className="gradient-text-primary">AI-Styled Outfits</span>
+                  Your <span className="gradient-text-primary">AI-Styled Looks</span>
                 </h1>
                 <p className="text-sm text-muted-foreground mt-1">
                   {formData
@@ -294,201 +338,185 @@ const Results = () => {
             </div>
           </ScrollReveal>
 
-          {userImage && !userImageUrl && (
-            <div className="flex items-center gap-3 mb-6 p-4 bg-muted/50 rounded-xl border border-border/50">
-              <Loader2 className="h-5 w-5 animate-spin text-primary" />
-              <p className="text-sm">Preparing your photo for virtual try-on…</p>
-            </div>
-          )}
+          {/* Outfit selector tabs */}
+          <div className="flex gap-3 mb-6 overflow-x-auto pb-2">
+            {outfits.map((o, idx) => (
+              <button
+                key={o.id}
+                onClick={() => setActiveOutfit(idx)}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium border transition-all whitespace-nowrap ${
+                  idx === activeOutfit
+                    ? "gradient-primary text-primary-foreground border-transparent shadow-card"
+                    : "border-border bg-card hover:border-primary/30"
+                }`}
+              >
+                <div className="flex gap-1">
+                  {o.colors.slice(0, 3).map((c) => (
+                    <span
+                      key={c}
+                      className="h-3 w-3 rounded-full border border-border/50"
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                </div>
+                {o.name}
+              </button>
+            ))}
+          </div>
 
-          <div className="space-y-10">
-            {outfits.map((outfit, i) => {
-              const currentItemIdx = selectedItemIndex[outfit.id] ?? 0;
-              const key = `${outfit.id}-${currentItemIdx}`;
-              const tryOn = tryOnResults[key];
-              const isActive = activeOutfitId === outfit.id;
-
-              return (
-                <ScrollReveal key={outfit.id} delay={i * 0.1}>
-                  <div className="bg-card rounded-2xl shadow-card border border-border/50 overflow-hidden hover:shadow-card-hover transition-[box-shadow] duration-300">
-                    <div className="p-6 md:p-8">
-                      <div className="flex items-start justify-between mb-6">
-                        <div>
-                          <h3 className="font-display text-xl font-bold">{outfit.name}</h3>
-                          <span className="text-xs text-muted-foreground">{outfit.occasion}</span>
+          {outfit && (
+            <div className="grid lg:grid-cols-5 gap-8">
+              {/* Left: Try-On Image (large) */}
+              <div className="lg:col-span-3">
+                <div className="bg-card rounded-2xl shadow-card border border-border/50 overflow-hidden">
+                  <div className="relative aspect-[3/4] bg-muted/20 flex items-center justify-center">
+                    {tryOnImage ? (
+                      <>
+                        <img
+                          src={tryOnImage}
+                          alt={`${outfit.name} on you`}
+                          className="w-full h-full object-contain"
+                        />
+                        <div className="absolute bottom-4 left-4 bg-background/80 backdrop-blur-sm rounded-xl px-4 py-2 flex items-center gap-2">
+                          <Sparkles className="h-4 w-4 text-primary" />
+                          <span className="text-sm font-semibold">AI Virtual Try-On</span>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <div className="flex items-center gap-2 mr-4">
-                            <Palette className="h-4 w-4 text-muted-foreground" />
-                            {outfit.colors.map((c) => (
-                              <span
-                                key={c}
-                                className="h-5 w-5 rounded-full border border-border shadow-sm"
-                                style={{ backgroundColor: c }}
-                              />
-                            ))}
-                          </div>
-                          <button className="p-2 rounded-lg hover:bg-muted transition-colors group">
-                            <Heart className="h-5 w-5 text-muted-foreground group-hover:text-destructive transition-colors" />
-                          </button>
-                        </div>
+                      </>
+                    ) : (
+                      <div className="text-center p-8">
+                        <img
+                          src={userImage}
+                          alt="Your photo"
+                          className="w-48 h-60 object-cover rounded-xl mx-auto mb-4 opacity-40"
+                        />
+                        <p className="text-sm text-muted-foreground">
+                          Virtual try-on couldn't be generated for this outfit.
+                          <br />
+                          Your photo is shown as a reference.
+                        </p>
                       </div>
+                    )}
+                  </div>
 
-                      <div className="grid md:grid-cols-2 gap-6">
-                        {/* Left: Try-On Viewer */}
-                        <div className="relative bg-muted/30 rounded-2xl border border-border/50 overflow-hidden min-h-[400px] flex items-center justify-center">
-                          {tryOn?.status === "loading" && isActive ? (
-                            <div className="p-8 w-full space-y-6">
-                              <div className="text-center">
-                                <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
-                                <p className="font-semibold text-sm">
-                                  {TRYON_STEPS[tryOnStep]?.label}
-                                </p>
-                                <p className="text-xs text-muted-foreground mt-1">
-                                  This usually takes 15–30 seconds
-                                </p>
-                              </div>
-                              <Progress
-                                value={((tryOnStep + 1) / TRYON_STEPS.length) * 100}
-                                className="h-2"
-                              />
-                              <div className="space-y-2">
-                                {TRYON_STEPS.map((step, idx) => {
-                                  const Icon = step.icon;
-                                  const isDone = idx < tryOnStep;
-                                  const isCurrent = idx === tryOnStep;
-                                  return (
-                                    <div
-                                      key={step.label}
-                                      className={`flex items-center gap-3 text-xs rounded-lg px-3 py-2 transition-all duration-300 ${
-                                        isCurrent
-                                          ? "bg-primary/10 text-primary font-medium"
-                                          : isDone
-                                          ? "text-muted-foreground line-through opacity-60"
-                                          : "text-muted-foreground/40"
-                                      }`}
-                                    >
-                                      <Icon className="h-4 w-4 flex-shrink-0" />
-                                      {step.label}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          ) : tryOn?.status === "done" && tryOn.imageUrl ? (
-                            <div className="relative w-full h-full">
-                              <img
-                                src={tryOn.imageUrl}
-                                alt={`${outfit.name} try-on`}
-                                className="w-full h-full object-contain"
-                              />
-                              <div className="absolute bottom-3 left-3 bg-background/80 backdrop-blur-sm rounded-lg px-3 py-1.5 text-xs font-medium flex items-center gap-1.5">
-                                <Sparkles className="h-3 w-3 text-primary" />
-                                AI Virtual Try-On
-                              </div>
-                            </div>
-                          ) : tryOn?.status === "error" ? (
-                            <div className="text-center p-6">
-                              <p className="text-sm text-destructive mb-3">
-                                {tryOn.error || "Try-on failed"}
-                              </p>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() =>
-                                  handleTryOn(outfit.id, outfit.items[currentItemIdx], currentItemIdx)
-                                }
-                              >
-                                <RotateCcw className="h-4 w-4" />
-                                Retry
-                              </Button>
-                            </div>
-                          ) : (
-                            <div className="text-center p-6">
-                              {userImage ? (
-                                <>
-                                  <img
-                                    src={userImage}
-                                    alt="Your photo"
-                                    className="w-32 h-40 object-cover rounded-xl mx-auto mb-4 opacity-50"
-                                  />
-                                  <p className="text-sm text-muted-foreground mb-3">
-                                    {userImageUrl
-                                      ? "Select an item to try on"
-                                      : "Uploading your photo…"}
-                                  </p>
-                                </>
-                              ) : (
-                                <>
-                                  <User className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
-                                  <p className="text-sm text-muted-foreground">
-                                    Upload a photo on the generator page to try on
-                                  </p>
-                                </>
-                              )}
-                            </div>
-                          )}
-                        </div>
+                  {/* Navigation arrows */}
+                  <div className="flex items-center justify-between p-4 border-t border-border/50">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={activeOutfit === 0}
+                      onClick={() => setActiveOutfit((prev) => prev - 1)}
+                    >
+                      <ChevronLeft className="h-4 w-4" /> Previous Look
+                    </Button>
+                    <span className="text-xs text-muted-foreground font-medium">
+                      Look {activeOutfit + 1} of {outfits.length}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={activeOutfit === outfits.length - 1}
+                      onClick={() => setActiveOutfit((prev) => prev + 1)}
+                    >
+                      Next Look <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
 
-                        {/* Right: Item Selector */}
-                        <div className="space-y-3">
-                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                            {userImageUrl ? "Tap an item to try it on" : "Outfit items"}
+              {/* Right: Outfit details & items */}
+              <div className="lg:col-span-2 space-y-5">
+                <div>
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h2 className="font-display text-2xl font-bold">{outfit.name}</h2>
+                      <p className="text-sm text-muted-foreground">{outfit.occasion}</p>
+                    </div>
+                    <button className="p-2 rounded-lg hover:bg-muted transition-colors group">
+                      <Heart className="h-5 w-5 text-muted-foreground group-hover:text-destructive transition-colors" />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 mt-3">
+                    <Palette className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-xs text-muted-foreground mr-1">Color palette:</span>
+                    {outfit.colors.map((c) => (
+                      <span
+                        key={c}
+                        className="h-5 w-5 rounded-full border border-border shadow-sm"
+                        style={{ backgroundColor: c }}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Outfit Items
+                  </p>
+                  {outfit.items.map((item, idx) => (
+                    <div
+                      key={`${item.name}-${idx}`}
+                      className="bg-muted/30 rounded-xl border border-border/50 overflow-hidden hover:border-primary/30 transition-colors"
+                    >
+                      <div className="flex gap-3 p-3">
+                        {/* Generated clothing image */}
+                        {item.generatedImageUrl ? (
+                          <img
+                            src={item.generatedImageUrl}
+                            alt={item.name}
+                            className="w-20 h-20 rounded-lg object-cover border border-border/50 flex-shrink-0"
+                          />
+                        ) : (
+                          <div className="w-20 h-20 rounded-lg bg-muted flex items-center justify-center flex-shrink-0 border border-border/50">
+                            <Shirt className="h-6 w-6 text-muted-foreground/40" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">
+                            {item.category}
                           </p>
-                          {outfit.items.map((item, idx) => {
-                            const itemKey = `${outfit.id}-${idx}`;
-                            const itemTryOn = tryOnResults[itemKey];
-                            const isSelected = currentItemIdx === idx && isActive;
-
-                            return (
-                              <div key={item.name} className="flex gap-2">
-                                <button
-                                  onClick={() => userImageUrl && handleTryOn(outfit.id, item, idx)}
-                                  disabled={!userImageUrl || itemTryOn?.status === "loading"}
-                                  className={`flex-1 text-left bg-muted/30 rounded-xl p-4 border transition-all duration-200 active:scale-[0.97] ${
-                                    isSelected
-                                      ? "border-primary shadow-md ring-1 ring-primary/20"
-                                      : "border-border/50 hover:border-primary/30"
-                                  } ${itemTryOn?.status === "loading" ? "opacity-60 cursor-wait" : ""} ${
-                                    !userImageUrl ? "cursor-default" : ""
-                                  }`}
-                                >
-                                  <div className="flex items-center gap-4">
-                                    <div className="flex-1 min-w-0">
-                                      <p className="text-xs text-muted-foreground">{item.category}</p>
-                                      <p className="text-sm font-semibold truncate">{item.name}</p>
-                                      <div className="flex items-center justify-between mt-1">
-                                        <p className="text-xs text-muted-foreground">{item.brand}</p>
-                                        <p className="text-sm font-bold text-primary">{item.price}</p>
-                                      </div>
-                                    </div>
-                                  </div>
-                                </button>
-                                <a
-                                  href={getAffiliateUrl(item.searchQuery)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="flex items-center justify-center w-12 rounded-xl border border-border/50 bg-muted/30 hover:bg-primary/10 hover:border-primary/30 transition-colors"
-                                  title="Shop on Amazon"
-                                >
-                                  <ShoppingBag className="h-4 w-4 text-muted-foreground" />
-                                </a>
-                              </div>
-                            );
-                          })}
+                          <p className="text-sm font-semibold truncate">{item.name}</p>
+                          <p className="text-xs text-muted-foreground">{item.brand}</p>
+                          <div className="flex items-center justify-between mt-1.5">
+                            <p className="text-sm font-bold text-primary">{item.price}</p>
+                            <a
+                              href={getAffiliateUrl(item.searchQuery)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1 text-[10px] font-medium text-primary hover:underline"
+                            >
+                              <ShoppingBag className="h-3 w-3" />
+                              Shop Now
+                            </a>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                </ScrollReveal>
-              );
-            })}
-          </div>
+                  ))}
+                </div>
 
-          <ScrollReveal delay={0.3}>
+                {/* Shop All button */}
+                <Button variant="hero" className="w-full" asChild>
+                  <a
+                    href={getAffiliateUrl(
+                      outfit.items.map((i) => i.searchQuery).join(" ")
+                    )}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <ShoppingBag className="h-4 w-4" />
+                    Shop This Look on Amazon
+                  </a>
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <ScrollReveal delay={0.2}>
             <div className="text-center mt-12">
-              <Button variant="hero" size="lg" asChild>
-                <Link to="/generator">Generate New Outfits</Link>
+              <Button variant="outline" size="lg" asChild>
+                <Link to="/generator">
+                  <RotateCcw className="h-4 w-4" /> Generate New Looks
+                </Link>
               </Button>
             </div>
           </ScrollReveal>
