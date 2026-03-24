@@ -18,6 +18,7 @@ import {
   User,
   Shirt,
   Eye,
+  Brain,
 } from "lucide-react";
 
 interface OutfitItem {
@@ -25,7 +26,7 @@ interface OutfitItem {
   brand: string;
   price: string;
   category: string;
-  styleImageUrl: string;
+  searchQuery: string;
 }
 
 interface Outfit {
@@ -36,97 +37,6 @@ interface Outfit {
   items: OutfitItem[];
 }
 
-// Real clothing image URLs from freely available sources
-const mockOutfits: Outfit[] = [
-  {
-    id: 1,
-    name: "Elegant Evening",
-    occasion: "Formal",
-    colors: ["#0f766e", "#d4af37", "#1e293b"],
-    items: [
-      {
-        name: "Teal Silk Blazer",
-        brand: "H&M",
-        price: "₹3,499",
-        category: "Outerwear",
-        styleImageUrl: "https://images.unsplash.com/photo-1591047139829-d91aecb6caea?w=400&q=80",
-      },
-      {
-        name: "Gold Satin Skirt",
-        brand: "Zara",
-        price: "₹2,799",
-        category: "Bottoms",
-        styleImageUrl: "https://images.unsplash.com/photo-1583496661160-fb5886a0aaaa?w=400&q=80",
-      },
-      {
-        name: "Black Heeled Boots",
-        brand: "Aldo",
-        price: "₹5,999",
-        category: "Footwear",
-        styleImageUrl: "https://images.unsplash.com/photo-1543163521-1bf539c55dd2?w=400&q=80",
-      },
-    ],
-  },
-  {
-    id: 2,
-    name: "Smart Casual",
-    occasion: "Business",
-    colors: ["#334155", "#14b8a6", "#f8fafc"],
-    items: [
-      {
-        name: "Navy Chino Trousers",
-        brand: "Uniqlo",
-        price: "₹2,990",
-        category: "Bottoms",
-        styleImageUrl: "https://images.unsplash.com/photo-1624378439575-d8705ad7ae80?w=400&q=80",
-      },
-      {
-        name: "Teal Knit Polo",
-        brand: "Mango",
-        price: "₹1,999",
-        category: "Tops",
-        styleImageUrl: "https://images.unsplash.com/photo-1625910513413-5fc42af57706?w=400&q=80",
-      },
-      {
-        name: "White Minimal Sneakers",
-        brand: "Adidas",
-        price: "₹4,299",
-        category: "Footwear",
-        styleImageUrl: "https://images.unsplash.com/photo-1549298916-b41d501d3772?w=400&q=80",
-      },
-    ],
-  },
-  {
-    id: 3,
-    name: "Weekend Relaxed",
-    occasion: "Casual",
-    colors: ["#d4af37", "#0f766e", "#f1f5f9"],
-    items: [
-      {
-        name: "Olive Linen Shirt",
-        brand: "Muji",
-        price: "₹2,490",
-        category: "Tops",
-        styleImageUrl: "https://images.unsplash.com/photo-1596755094514-f87e34085b2c?w=400&q=80",
-      },
-      {
-        name: "Cream Wide-Leg Pants",
-        brand: "COS",
-        price: "₹3,990",
-        category: "Bottoms",
-        styleImageUrl: "https://images.unsplash.com/photo-1594938298603-c8148c4dae35?w=400&q=80",
-      },
-      {
-        name: "Tan Leather Sandals",
-        brand: "Birkenstock",
-        price: "₹6,500",
-        category: "Footwear",
-        styleImageUrl: "https://images.unsplash.com/photo-1603487742131-4160ec999306?w=400&q=80",
-      },
-    ],
-  },
-];
-
 type TryOnStatus = "idle" | "uploading" | "loading" | "done" | "error";
 
 interface TryOnResult {
@@ -135,7 +45,14 @@ interface TryOnResult {
   error?: string;
 }
 
-const PROCESSING_STEPS = [
+const GENERATION_STEPS = [
+  { label: "Analyzing your profile", icon: User },
+  { label: "AI styling your body type", icon: Brain },
+  { label: "Matching colors to skin tone", icon: Palette },
+  { label: "Curating personalized outfits", icon: Sparkles },
+];
+
+const TRYON_STEPS = [
   { label: "Uploading your photo", icon: User },
   { label: "Analyzing body proportions", icon: Eye },
   { label: "Fitting clothing to your body", icon: Shirt },
@@ -145,21 +62,63 @@ const PROCESSING_STEPS = [
 const Results = () => {
   const location = useLocation();
   const formData = location.state?.form;
-  const userImage = location.state?.imagePreview; // base64 data URI
+  const userImage = location.state?.imagePreview;
+
+  const [outfits, setOutfits] = useState<Outfit[]>([]);
+  const [generationStatus, setGenerationStatus] = useState<"loading" | "done" | "error">("loading");
+  const [generationError, setGenerationError] = useState("");
+  const [genStep, setGenStep] = useState(0);
 
   const [userImageUrl, setUserImageUrl] = useState<string | null>(null);
   const [tryOnResults, setTryOnResults] = useState<Record<string, TryOnResult>>({});
   const [activeOutfitId, setActiveOutfitId] = useState<number | null>(null);
-  const [processingStep, setProcessingStep] = useState(0);
+  const [tryOnStep, setTryOnStep] = useState(0);
   const [selectedItemIndex, setSelectedItemIndex] = useState<Record<number, number>>({});
 
-  // Upload user image to storage on mount
+  // Generate outfits via AI on mount
+  useEffect(() => {
+    if (!formData) return;
+
+    const generate = async () => {
+      const stepInterval = setInterval(() => {
+        setGenStep((prev) => Math.min(prev + 1, GENERATION_STEPS.length - 1));
+      }, 2000);
+
+      try {
+        const { data, error } = await supabase.functions.invoke("generate-outfits", {
+          body: formData,
+        });
+
+        clearInterval(stepInterval);
+
+        if (error) throw error;
+        if (data?.error) throw new Error(data.error);
+
+        const generated = data?.outfits;
+        if (!Array.isArray(generated) || generated.length === 0) {
+          throw new Error("No outfits were generated");
+        }
+
+        setOutfits(generated);
+        setGenerationStatus("done");
+      } catch (err: unknown) {
+        clearInterval(stepInterval);
+        const msg = err instanceof Error ? err.message : "Failed to generate outfits";
+        console.error("Generation error:", msg);
+        setGenerationError(msg);
+        setGenerationStatus("error");
+      }
+    };
+
+    generate();
+  }, [formData]);
+
+  // Upload user image to storage
   useEffect(() => {
     if (!userImage) return;
 
     const uploadImage = async () => {
       try {
-        // Convert base64 to blob
         const res = await fetch(userImage);
         const blob = await res.blob();
         const fileName = `tryon-${Date.now()}.jpg`;
@@ -177,7 +136,6 @@ const Results = () => {
           .from("user-images")
           .getPublicUrl(data.path);
 
-        console.log("Uploaded user image:", urlData.publicUrl);
         setUserImageUrl(urlData.publicUrl);
       } catch (err) {
         console.error("Failed to upload user image:", err);
@@ -187,16 +145,6 @@ const Results = () => {
     uploadImage();
   }, [userImage]);
 
-  // Auto-trigger try-on for first outfit once image is uploaded
-  useEffect(() => {
-    if (userImageUrl && mockOutfits.length > 0) {
-      const firstOutfit = mockOutfits[0];
-      const firstItem = firstOutfit.items[0];
-      handleTryOn(firstOutfit.id, firstItem, 0);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userImageUrl]);
-
   const handleTryOn = async (outfitId: number, item: OutfitItem, itemIdx: number) => {
     if (!userImageUrl) return;
 
@@ -204,41 +152,30 @@ const Results = () => {
     setActiveOutfitId(outfitId);
     setSelectedItemIndex((prev) => ({ ...prev, [outfitId]: itemIdx }));
     setTryOnResults((prev) => ({ ...prev, [key]: { imageUrl: "", status: "loading" } }));
-    setProcessingStep(0);
+    setTryOnStep(0);
 
     const stepInterval = setInterval(() => {
-      setProcessingStep((prev) => Math.min(prev + 1, PROCESSING_STEPS.length - 1));
+      setTryOnStep((prev) => Math.min(prev + 1, TRYON_STEPS.length - 1));
     }, 1500);
 
     try {
-      console.log("Invoking virtual-tryon with:", {
-        imageUrl: userImageUrl,
-        styleImageUrl: item.styleImageUrl,
-      });
-
       const { data, error } = await supabase.functions.invoke("virtual-tryon", {
         body: {
           imageUrl: userImageUrl,
-          styleImageUrl: item.styleImageUrl,
+          clothDescription: `${item.name} by ${item.brand}`,
         },
       });
 
       clearInterval(stepInterval);
-
       if (error) throw error;
 
-      console.log("Virtual try-on response:", JSON.stringify(data));
-
-      // LightX returns output as a URL string in result.output
       const outputUrl =
         data?.result?.output ||
         data?.result?.output?.[0]?.url ||
         data?.result?.output?.[0] ||
         "";
 
-      if (!outputUrl) {
-        throw new Error("No output image received from try-on API");
-      }
+      if (!outputUrl) throw new Error("No output image received");
 
       setTryOnResults((prev) => ({
         ...prev,
@@ -247,13 +184,90 @@ const Results = () => {
     } catch (err: unknown) {
       clearInterval(stepInterval);
       const msg = err instanceof Error ? err.message : "Try-on failed";
-      console.error("Try-on error:", msg);
       setTryOnResults((prev) => ({
         ...prev,
         [key]: { imageUrl: "", status: "error", error: msg },
       }));
     }
   };
+
+  const getAffiliateUrl = (query: string) =>
+    `https://www.amazon.in/s?k=${encodeURIComponent(query)}`;
+
+  // Loading state while AI generates outfits
+  if (generationStatus === "loading") {
+    return (
+      <div className="min-h-screen">
+        <Navbar />
+        <div className="pt-24 pb-20 flex items-center justify-center min-h-[80vh]">
+          <div className="max-w-md w-full mx-auto px-4 space-y-8 text-center">
+            <div>
+              <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-6" />
+              <h2 className="text-2xl font-bold mb-2">
+                Creating Your <span className="gradient-text-primary">Perfect Outfits</span>
+              </h2>
+              <p className="text-muted-foreground text-sm">
+                Our AI is analyzing your profile and curating personalized looks…
+              </p>
+            </div>
+            <Progress value={((genStep + 1) / GENERATION_STEPS.length) * 100} className="h-2" />
+            <div className="space-y-2">
+              {GENERATION_STEPS.map((step, idx) => {
+                const Icon = step.icon;
+                const isDone = idx < genStep;
+                const isCurrent = idx === genStep;
+                return (
+                  <div
+                    key={step.label}
+                    className={`flex items-center gap-3 text-sm rounded-lg px-4 py-2.5 transition-all duration-300 ${
+                      isCurrent
+                        ? "bg-primary/10 text-primary font-medium"
+                        : isDone
+                        ? "text-muted-foreground line-through opacity-60"
+                        : "text-muted-foreground/40"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4 flex-shrink-0" />
+                    {step.label}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+        <Footer />
+      </div>
+    );
+  }
+
+  // Error state
+  if (generationStatus === "error") {
+    return (
+      <div className="min-h-screen">
+        <Navbar />
+        <div className="pt-24 pb-20 flex items-center justify-center min-h-[80vh]">
+          <div className="max-w-md w-full mx-auto px-4 text-center space-y-6">
+            <div className="bg-destructive/10 rounded-full p-4 w-fit mx-auto">
+              <RotateCcw className="h-8 w-8 text-destructive" />
+            </div>
+            <h2 className="text-2xl font-bold">Generation Failed</h2>
+            <p className="text-sm text-muted-foreground">{generationError}</p>
+            <div className="flex gap-3 justify-center">
+              <Button variant="outline" asChild>
+                <Link to="/generator">
+                  <ArrowLeft className="h-4 w-4" /> Go Back
+                </Link>
+              </Button>
+              <Button variant="hero" onClick={() => window.location.reload()}>
+                <RotateCcw className="h-4 w-4" /> Retry
+              </Button>
+            </div>
+          </div>
+        </div>
+        <Footer />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen">
@@ -269,28 +283,26 @@ const Results = () => {
               </Button>
               <div>
                 <h1 className="text-3xl font-bold">
-                  Your <span className="gradient-text-primary">Virtual Try-On</span>
+                  Your <span className="gradient-text-primary">AI-Styled Outfits</span>
                 </h1>
                 <p className="text-sm text-muted-foreground mt-1">
                   {formData
-                    ? `${formData.bodyType} build · ${formData.skinTone} tone · ${formData.occasion}`
-                    : "See outfits on your body"}
+                    ? `Personalized for ${formData.bodyType} build · ${formData.skinTone} tone · ${formData.occasion}`
+                    : "AI-generated outfit recommendations"}
                 </p>
               </div>
             </div>
           </ScrollReveal>
 
-          {/* Upload status */}
           {userImage && !userImageUrl && (
             <div className="flex items-center gap-3 mb-6 p-4 bg-muted/50 rounded-xl border border-border/50">
               <Loader2 className="h-5 w-5 animate-spin text-primary" />
-              <p className="text-sm">Preparing your photo for try-on…</p>
+              <p className="text-sm">Preparing your photo for virtual try-on…</p>
             </div>
           )}
 
-          {/* Outfit Cards with Try-On */}
           <div className="space-y-10">
-            {mockOutfits.map((outfit, i) => {
+            {outfits.map((outfit, i) => {
               const currentItemIdx = selectedItemIndex[outfit.id] ?? 0;
               const key = `${outfit.id}-${currentItemIdx}`;
               const tryOn = tryOnResults[key];
@@ -300,7 +312,6 @@ const Results = () => {
                 <ScrollReveal key={outfit.id} delay={i * 0.1}>
                   <div className="bg-card rounded-2xl shadow-card border border-border/50 overflow-hidden hover:shadow-card-hover transition-[box-shadow] duration-300">
                     <div className="p-6 md:p-8">
-                      {/* Header */}
                       <div className="flex items-start justify-between mb-6">
                         <div>
                           <h3 className="font-display text-xl font-bold">{outfit.name}</h3>
@@ -323,7 +334,6 @@ const Results = () => {
                         </div>
                       </div>
 
-                      {/* Try-On Viewer + Items */}
                       <div className="grid md:grid-cols-2 gap-6">
                         {/* Left: Try-On Viewer */}
                         <div className="relative bg-muted/30 rounded-2xl border border-border/50 overflow-hidden min-h-[400px] flex items-center justify-center">
@@ -332,21 +342,21 @@ const Results = () => {
                               <div className="text-center">
                                 <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
                                 <p className="font-semibold text-sm">
-                                  {PROCESSING_STEPS[processingStep]?.label}
+                                  {TRYON_STEPS[tryOnStep]?.label}
                                 </p>
                                 <p className="text-xs text-muted-foreground mt-1">
                                   This usually takes 15–30 seconds
                                 </p>
                               </div>
                               <Progress
-                                value={((processingStep + 1) / PROCESSING_STEPS.length) * 100}
+                                value={((tryOnStep + 1) / TRYON_STEPS.length) * 100}
                                 className="h-2"
                               />
                               <div className="space-y-2">
-                                {PROCESSING_STEPS.map((step, idx) => {
+                                {TRYON_STEPS.map((step, idx) => {
                                   const Icon = step.icon;
-                                  const isDone = idx < processingStep;
-                                  const isCurrent = idx === processingStep;
+                                  const isDone = idx < tryOnStep;
+                                  const isCurrent = idx === tryOnStep;
                                   return (
                                     <div
                                       key={step.label}
@@ -412,7 +422,7 @@ const Results = () => {
                                 <>
                                   <User className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
                                   <p className="text-sm text-muted-foreground">
-                                    Upload a photo on the generator page first
+                                    Upload a photo on the generator page to try on
                                   </p>
                                 </>
                               )}
@@ -423,7 +433,7 @@ const Results = () => {
                         {/* Right: Item Selector */}
                         <div className="space-y-3">
                           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                            Tap an item to try it on
+                            {userImageUrl ? "Tap an item to try it on" : "Outfit items"}
                           </p>
                           {outfit.items.map((item, idx) => {
                             const itemKey = `${outfit.id}-${idx}`;
@@ -431,37 +441,39 @@ const Results = () => {
                             const isSelected = currentItemIdx === idx && isActive;
 
                             return (
-                              <button
-                                key={item.name}
-                                onClick={() => handleTryOn(outfit.id, item, idx)}
-                                disabled={!userImageUrl || itemTryOn?.status === "loading"}
-                                className={`w-full text-left bg-muted/30 rounded-xl p-4 border transition-all duration-200 active:scale-[0.97] ${
-                                  isSelected
-                                    ? "border-primary shadow-md ring-1 ring-primary/20"
-                                    : "border-border/50 hover:border-primary/30"
-                                } ${itemTryOn?.status === "loading" ? "opacity-60 cursor-wait" : ""} ${
-                                  !userImageUrl ? "opacity-50 cursor-not-allowed" : ""
-                                }`}
-                              >
-                                <div className="flex items-center gap-4">
-                                  <div className="w-16 h-16 rounded-lg bg-muted overflow-hidden flex-shrink-0">
-                                    <img
-                                      src={item.styleImageUrl}
-                                      alt={item.name}
-                                      className="w-full h-full object-cover"
-                                    />
-                                  </div>
-                                  <div className="flex-1 min-w-0">
-                                    <p className="text-xs text-muted-foreground">{item.category}</p>
-                                    <p className="text-sm font-semibold truncate">{item.name}</p>
-                                    <div className="flex items-center justify-between mt-1">
-                                      <p className="text-xs text-muted-foreground">{item.brand}</p>
-                                      <p className="text-sm font-bold text-primary">{item.price}</p>
+                              <div key={item.name} className="flex gap-2">
+                                <button
+                                  onClick={() => userImageUrl && handleTryOn(outfit.id, item, idx)}
+                                  disabled={!userImageUrl || itemTryOn?.status === "loading"}
+                                  className={`flex-1 text-left bg-muted/30 rounded-xl p-4 border transition-all duration-200 active:scale-[0.97] ${
+                                    isSelected
+                                      ? "border-primary shadow-md ring-1 ring-primary/20"
+                                      : "border-border/50 hover:border-primary/30"
+                                  } ${itemTryOn?.status === "loading" ? "opacity-60 cursor-wait" : ""} ${
+                                    !userImageUrl ? "cursor-default" : ""
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-4">
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-xs text-muted-foreground">{item.category}</p>
+                                      <p className="text-sm font-semibold truncate">{item.name}</p>
+                                      <div className="flex items-center justify-between mt-1">
+                                        <p className="text-xs text-muted-foreground">{item.brand}</p>
+                                        <p className="text-sm font-bold text-primary">{item.price}</p>
+                                      </div>
                                     </div>
                                   </div>
-                                  <ExternalLink className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                                </div>
-                              </button>
+                                </button>
+                                <a
+                                  href={getAffiliateUrl(item.searchQuery)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex items-center justify-center w-12 rounded-xl border border-border/50 bg-muted/30 hover:bg-primary/10 hover:border-primary/30 transition-colors"
+                                  title="Shop on Amazon"
+                                >
+                                  <ShoppingBag className="h-4 w-4 text-muted-foreground" />
+                                </a>
+                              </div>
                             );
                           })}
                         </div>
