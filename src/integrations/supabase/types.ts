@@ -14,7 +14,83 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      generated_outfits: {
+        Row: {
+          colors: string[] | null
+          created_at: string
+          id: string
+          items: Json
+          occasion: string
+          outfit_name: string
+          profile_id: string
+          try_on_image_url: string | null
+        }
+        Insert: {
+          colors?: string[] | null
+          created_at?: string
+          id?: string
+          items?: Json
+          occasion: string
+          outfit_name: string
+          profile_id: string
+          try_on_image_url?: string | null
+        }
+        Update: {
+          colors?: string[] | null
+          created_at?: string
+          id?: string
+          items?: Json
+          occasion?: string
+          outfit_name?: string
+          profile_id?: string
+          try_on_image_url?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "generated_outfits_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      user_profiles: {
+        Row: {
+          body_type: string
+          created_at: string
+          gender: string
+          hairstyle: string | null
+          height: string | null
+          id: string
+          occasion: string
+          skin_tone: string | null
+          user_image_url: string | null
+        }
+        Insert: {
+          body_type: string
+          created_at?: string
+          gender: string
+          hairstyle?: string | null
+          height?: string | null
+          id?: string
+          occasion: string
+          skin_tone?: string | null
+          user_image_url?: string | null
+        }
+        Update: {
+          body_type?: string
+          created_at?: string
+          gender?: string
+          hairstyle?: string | null
+          height?: string | null
+          id?: string
+          occasion?: string
+          skin_tone?: string | null
+          user_image_url?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
