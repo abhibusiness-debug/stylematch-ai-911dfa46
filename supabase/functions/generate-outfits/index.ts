@@ -26,9 +26,15 @@ serve(async (req) => {
       );
     }
 
-    const systemPrompt = `You are an expert AI fashion stylist. Generate exactly 3 complete outfit recommendations as a JSON array. Each outfit must be tailored to the user's physical attributes and occasion.
+    const systemPrompt = `You are an expert AI fashion stylist specializing in BUDGET-FRIENDLY fashion in India. Generate exactly 3 complete outfit recommendations as a JSON array. Each outfit must be tailored to the user's physical attributes and occasion.
 
 IMPORTANT: You must respond with ONLY a valid JSON array, no markdown, no explanation.
+
+CRITICAL PRICING RULES:
+- Total outfit cost must be UNDER ₹3,000
+- Individual items should be ₹200 - ₹1,200 max
+- Focus on affordable brands: H&M, Zara (sale items), AJIO, Myntra house brands (HRX, Roadster, Mast & Harbour, HERE&NOW, Kook N Keech), FBB, Max Fashion, Pantaloons, Westside, V-Mart, Decathlon
+- NO luxury or premium brands
 
 Each outfit object must have this exact structure:
 {
@@ -38,24 +44,25 @@ Each outfit object must have this exact structure:
   "items": [
     {
       "name": "Specific item name with color/material",
-      "brand": "A real affordable brand available in India (H&M, Zara, Uniqlo, Mango, AJIO, Myntra, etc.)",
-      "price": "₹X,XXX (realistic INR price)",
+      "brand": "A real affordable brand available in India",
+      "price": "₹XXX (realistic budget INR price)",
       "category": "Tops|Bottoms|Outerwear|Footwear|Accessories",
-      "searchQuery": "exact search term to find this item on Amazon/Flipkart"
+      "searchQueryFlipkart": "exact search term to find this item on Flipkart",
+      "searchQueryMyntra": "exact search term to find this item on Myntra"
     }
   ]
 }
 
 Rules:
-- Each outfit MUST have 3-4 items covering different categories
+- Each outfit MUST have 4-5 items: Top + Bottom + Footwear + 1-2 Accessories
 - Colors must complement the user's skin tone
 - Styles must flatter the user's body type
-- Prices must be realistic for Indian market
-- Brand names must be real brands
-- searchQuery should be specific enough to find the actual item online
-- The 3 outfits should offer variety (e.g., one dressy, one casual, one trendy)`;
+- ALL prices must be budget-friendly (₹200-₹1,200 per item)
+- Brand names must be real affordable Indian brands
+- The 3 outfits should offer variety (e.g., one dressy, one casual, one trendy)
+- Include a complete outfit description field for virtual try-on`;
 
-    const userPrompt = `Generate 3 personalized outfit recommendations for:
+    const userPrompt = `Generate 3 BUDGET-FRIENDLY personalized outfit recommendations for:
 - Gender: ${gender}
 - Height: ${height || "not specified"}cm
 - Body Type: ${bodyType}
@@ -63,14 +70,10 @@ Rules:
 - Hairstyle: ${hairstyle || "not specified"}
 - Occasion: ${occasion}
 
-Consider:
-1. Colors that complement ${skinTone || "their"} skin tone
-2. Cuts and silhouettes that flatter a ${bodyType} body type
-3. Appropriate formality for ${occasion}
-4. Current fashion trends
-5. Practical and accessible brands in India`;
+IMPORTANT: Keep all items affordable (₹200-₹1,200 each, total under ₹3,000).
+Focus on Flipkart and Myntra available brands.`;
 
-    console.log("Generating outfits for:", { gender, bodyType, skinTone, occasion });
+    console.log("Generating budget outfits for:", { gender, bodyType, skinTone, occasion });
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -101,6 +104,7 @@ Consider:
                         name: { type: "string" },
                         occasion: { type: "string" },
                         colors: { type: "array", items: { type: "string" } },
+                        fullOutfitDescription: { type: "string", description: "Complete description of the full outfit including top, bottom, shoes for virtual try-on rendering" },
                         items: {
                           type: "array",
                           items: {
@@ -110,14 +114,15 @@ Consider:
                               brand: { type: "string" },
                               price: { type: "string" },
                               category: { type: "string" },
-                              searchQuery: { type: "string" },
+                              searchQueryFlipkart: { type: "string" },
+                              searchQueryMyntra: { type: "string" },
                             },
-                            required: ["name", "brand", "price", "category", "searchQuery"],
+                            required: ["name", "brand", "price", "category", "searchQueryFlipkart", "searchQueryMyntra"],
                             additionalProperties: false,
                           },
                         },
                       },
-                      required: ["name", "occasion", "colors", "items"],
+                      required: ["name", "occasion", "colors", "fullOutfitDescription", "items"],
                       additionalProperties: false,
                     },
                   },
@@ -153,7 +158,6 @@ Consider:
     const aiData = await response.json();
     console.log("AI response received");
 
-    // Extract structured output from tool call
     const toolCall = aiData.choices?.[0]?.message?.tool_calls?.[0];
     if (!toolCall?.function?.arguments) {
       throw new Error("No structured output from AI");
@@ -166,13 +170,12 @@ Consider:
       throw new Error("AI returned no outfits");
     }
 
-    // Add IDs to outfits
     const outfitsWithIds = outfits.map((o: any, i: number) => ({
       ...o,
       id: i + 1,
     }));
 
-    console.log(`Generated ${outfitsWithIds.length} outfits successfully`);
+    console.log(`Generated ${outfitsWithIds.length} budget outfits successfully`);
 
     return new Response(JSON.stringify({ outfits: outfitsWithIds }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

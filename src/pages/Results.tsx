@@ -20,6 +20,7 @@ import {
   Brain,
   ChevronLeft,
   ChevronRight,
+  ExternalLink,
 } from "lucide-react";
 
 interface OutfitItem {
@@ -27,7 +28,8 @@ interface OutfitItem {
   brand: string;
   price: string;
   category: string;
-  searchQuery: string;
+  searchQueryFlipkart: string;
+  searchQueryMyntra: string;
   generatedImageUrl?: string;
 }
 
@@ -36,6 +38,7 @@ interface Outfit {
   name: string;
   occasion: string;
   colors: string[];
+  fullOutfitDescription?: string;
   items: OutfitItem[];
 }
 
@@ -48,8 +51,8 @@ type PipelineStage =
 
 const PIPELINE_STEPS = [
   { key: "generating-outfits", label: "AI is analyzing your style profile", icon: Brain },
-  { key: "generating-images", label: "Creating outfit visuals", icon: Shirt },
-  { key: "trying-on", label: "Fitting outfits onto your body", icon: Eye },
+  { key: "generating-images", label: "Creating full outfit visuals", icon: Shirt },
+  { key: "trying-on", label: "Fitting complete outfits onto your body", icon: Eye },
   { key: "done", label: "Your styled looks are ready!", icon: Sparkles },
 ];
 
@@ -65,12 +68,16 @@ const Results = () => {
   const [tryOnImages, setTryOnImages] = useState<Record<number, string>>({});
   const [activeOutfit, setActiveOutfit] = useState(0);
   const [progress, setProgress] = useState(5);
+  const [profileId, setProfileId] = useState<string | null>(null);
   const pipelineRan = useRef(false);
 
-  const getAffiliateUrl = (query: string) =>
-    `https://www.amazon.in/s?k=${encodeURIComponent(query)}`;
+  const getFlipkartUrl = (query: string) =>
+    `https://www.flipkart.com/search?q=${encodeURIComponent(query)}`;
 
-  // Full pipeline: generate outfits → generate images → try-on
+  const getMyntraUrl = (query: string) =>
+    `https://www.myntra.com/${encodeURIComponent(query.replace(/\s+/g, '-'))}`;
+
+  // Full pipeline
   useEffect(() => {
     if (!formData || !userImage || pipelineRan.current) return;
     pipelineRan.current = true;
@@ -93,6 +100,23 @@ const Results = () => {
         setUserImageUrl(uploadedUserUrl);
         setProgress(10);
 
+        // Save user profile to database
+        const { data: profileData } = await supabase
+          .from("user_profiles")
+          .insert({
+            gender: formData.gender,
+            height: formData.height || null,
+            body_type: formData.bodyType,
+            skin_tone: formData.skinTone || null,
+            hairstyle: formData.hairstyle || null,
+            occasion: formData.occasion,
+            user_image_url: uploadedUserUrl,
+          })
+          .select("id")
+          .single();
+
+        if (profileData) setProfileId(profileData.id);
+
         // --- Stage 2: Generate outfits ---
         setStage("generating-outfits");
         const { data: outfitData, error: outfitErr } = await supabase.functions.invoke(
@@ -107,40 +131,31 @@ const Results = () => {
         setOutfits(generated);
         setProgress(30);
 
-        // --- Stage 3: Generate clothing images ---
+        // --- Stage 3: Generate FULL outfit images (top + bottom + shoes) ---
         setStage("generating-images");
         const updatedOutfits = [...generated];
 
-        // Generate images for the key item (first item) of each outfit
         const imagePromises = generated.map(async (outfit, oi) => {
-          // Pick the main garment (top/shirt category, or first item)
-          const mainItem =
-            outfit.items.find(
-              (it) =>
-                it.category.toLowerCase().includes("top") ||
-                it.category.toLowerCase().includes("shirt") ||
-                it.category.toLowerCase().includes("dress")
-            ) || outfit.items[0];
+          // Build a complete outfit description for full-body image generation
+          const fullDescription = outfit.fullOutfitDescription ||
+            outfit.items.map(item => `${item.name} (${item.category})`).join(", ");
 
           try {
             const { data, error } = await supabase.functions.invoke(
               "generate-clothing-image",
               {
                 body: {
-                  description: `${mainItem.name} by ${mainItem.brand} - ${mainItem.category}`,
+                  description: fullDescription,
                   outfitId: outfit.id,
                   itemIndex: 0,
                 },
               }
             );
             if (!error && data?.imageUrl) {
-              // Assign to all items for simplicity; main item gets the image
               updatedOutfits[oi] = {
                 ...updatedOutfits[oi],
                 items: updatedOutfits[oi].items.map((item, ii) =>
-                  ii === outfit.items.indexOf(mainItem)
-                    ? { ...item, generatedImageUrl: data.imageUrl }
-                    : item
+                  ii === 0 ? { ...item, generatedImageUrl: data.imageUrl } : item
                 ),
               };
             }
@@ -154,10 +169,9 @@ const Results = () => {
         setOutfits(updatedOutfits);
         setProgress(60);
 
-        // --- Stage 4: Virtual try-on for each outfit ---
+        // --- Stage 4: Virtual try-on for each outfit (full body) ---
         setStage("trying-on");
         const tryOnPromises = updatedOutfits.map(async (outfit, oi) => {
-          // Find item with generated image
           const itemWithImage = outfit.items.find((it) => it.generatedImageUrl);
           if (!itemWithImage?.generatedImageUrl) return;
 
@@ -176,6 +190,18 @@ const Results = () => {
                 "";
               if (outputUrl) {
                 setTryOnImages((prev) => ({ ...prev, [outfit.id]: outputUrl }));
+
+                // Save outfit to database
+                if (profileData?.id) {
+                  await supabase.from("generated_outfits").insert({
+                    profile_id: profileData.id,
+                    outfit_name: outfit.name,
+                    occasion: outfit.occasion,
+                    colors: outfit.colors,
+                    items: outfit.items as any,
+                    try_on_image_url: outputUrl,
+                  });
+                }
               }
             }
           } catch (e) {
@@ -200,7 +226,7 @@ const Results = () => {
 
   const currentStageIdx = PIPELINE_STEPS.findIndex((s) => s.key === stage);
 
-  // Loading / processing state
+  // Loading state
   if (stage !== "done" && stage !== "error") {
     return (
       <div className="min-h-screen">
@@ -245,7 +271,6 @@ const Results = () => {
               })}
             </div>
 
-            {/* Show partial results as they come in */}
             {outfits.length > 0 && (
               <div className="mt-6 text-left">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
@@ -366,7 +391,7 @@ const Results = () => {
 
           {outfit && (
             <div className="grid lg:grid-cols-5 gap-8">
-              {/* Left: Try-On Image (large) */}
+              {/* Left: Try-On Image */}
               <div className="lg:col-span-3">
                 <div className="bg-card rounded-2xl shadow-card border border-border/50 overflow-hidden">
                   <div className="relative aspect-[3/4] bg-muted/20 flex items-center justify-center">
@@ -458,7 +483,6 @@ const Results = () => {
                       className="bg-muted/30 rounded-xl border border-border/50 overflow-hidden hover:border-primary/30 transition-colors"
                     >
                       <div className="flex gap-3 p-3">
-                        {/* Generated clothing image */}
                         {item.generatedImageUrl ? (
                           <img
                             src={item.generatedImageUrl}
@@ -478,15 +502,26 @@ const Results = () => {
                           <p className="text-xs text-muted-foreground">{item.brand}</p>
                           <div className="flex items-center justify-between mt-1.5">
                             <p className="text-sm font-bold text-primary">{item.price}</p>
-                            <a
-                              href={getAffiliateUrl(item.searchQuery)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center gap-1 text-[10px] font-medium text-primary hover:underline"
-                            >
-                              <ShoppingBag className="h-3 w-3" />
-                              Shop Now
-                            </a>
+                            <div className="flex gap-2">
+                              <a
+                                href={getFlipkartUrl(item.searchQueryFlipkart)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1 text-[10px] font-medium text-blue-600 hover:underline"
+                              >
+                                <ShoppingBag className="h-3 w-3" />
+                                Flipkart
+                              </a>
+                              <a
+                                href={getMyntraUrl(item.searchQueryMyntra)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1 text-[10px] font-medium text-pink-600 hover:underline"
+                              >
+                                <ExternalLink className="h-3 w-3" />
+                                Myntra
+                              </a>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -494,19 +529,33 @@ const Results = () => {
                   ))}
                 </div>
 
-                {/* Shop All button */}
-                <Button variant="hero" className="w-full" asChild>
-                  <a
-                    href={getAffiliateUrl(
-                      outfit.items.map((i) => i.searchQuery).join(" ")
-                    )}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <ShoppingBag className="h-4 w-4" />
-                    Shop This Look on Amazon
-                  </a>
-                </Button>
+                {/* Shop buttons */}
+                <div className="flex gap-3">
+                  <Button variant="hero" className="flex-1" asChild>
+                    <a
+                      href={getFlipkartUrl(
+                        outfit.items.map((i) => i.searchQueryFlipkart).join(" ")
+                      )}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <ShoppingBag className="h-4 w-4" />
+                      Shop on Flipkart
+                    </a>
+                  </Button>
+                  <Button variant="outline" className="flex-1" asChild>
+                    <a
+                      href={getMyntraUrl(
+                        outfit.items.map((i) => i.searchQueryMyntra).join(" ")
+                      )}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      Shop on Myntra
+                    </a>
+                  </Button>
+                </div>
               </div>
             </div>
           )}
