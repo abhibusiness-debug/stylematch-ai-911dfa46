@@ -59,6 +59,7 @@ const PIPELINE_STEPS = [
 
 const Results = () => {
   const location = useLocation();
+  const { user } = useAuth();
   const formData = location.state?.form;
   const userImage = location.state?.imagePreview;
 
