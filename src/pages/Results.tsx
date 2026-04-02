@@ -516,7 +516,7 @@ const Results = () => {
                                 href={getMyntraUrl(item.searchQueryMyntra)}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="flex items-center gap-1 text-[10px] font-medium text-pink-600 hover:underline"
+                                className="flex items-center gap-1 text-[10px] font-medium text-accent-foreground hover:underline"
                               >
                                 <ExternalLink className="h-3 w-3" />
                                 Myntra
