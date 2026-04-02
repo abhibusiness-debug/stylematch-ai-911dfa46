@@ -113,6 +113,7 @@ const Results = () => {
             hairstyle: formData.hairstyle || null,
             occasion: formData.occasion,
             user_image_url: uploadedUserUrl,
+            user_id: user?.id,
           })
           .select("id")
           .single();
