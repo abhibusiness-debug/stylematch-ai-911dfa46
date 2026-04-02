@@ -198,6 +198,7 @@ const Results = () => {
                 if (profileData?.id) {
                   await supabase.from("generated_outfits").insert({
                     profile_id: profileData.id,
+                    user_id: user?.id,
                     outfit_name: outfit.name,
                     occasion: outfit.occasion,
                     colors: outfit.colors,
