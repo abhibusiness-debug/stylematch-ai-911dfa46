@@ -507,7 +507,7 @@ const Results = () => {
                                 href={getFlipkartUrl(item.searchQueryFlipkart)}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="flex items-center gap-1 text-[10px] font-medium text-blue-600 hover:underline"
+                                className="flex items-center gap-1 text-[10px] font-medium text-primary hover:underline"
                               >
                                 <ShoppingBag className="h-3 w-3" />
                                 Flipkart
