@@ -1,5 +1,6 @@
 import { useLocation, Link } from "react-router-dom";
 import { useState, useEffect, useRef } from "react";
+import { useAuth } from "@/contexts/AuthContext";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { ScrollReveal } from "@/components/ScrollReveal";
@@ -58,6 +59,7 @@ const PIPELINE_STEPS = [
 
 const Results = () => {
   const location = useLocation();
+  const { user } = useAuth();
   const formData = location.state?.form;
   const userImage = location.state?.imagePreview;
 
@@ -111,6 +113,7 @@ const Results = () => {
             hairstyle: formData.hairstyle || null,
             occasion: formData.occasion,
             user_image_url: uploadedUserUrl,
+            user_id: user?.id,
           })
           .select("id")
           .single();
@@ -195,6 +198,7 @@ const Results = () => {
                 if (profileData?.id) {
                   await supabase.from("generated_outfits").insert({
                     profile_id: profileData.id,
+                    user_id: user?.id,
                     outfit_name: outfit.name,
                     occasion: outfit.occasion,
                     colors: outfit.colors,

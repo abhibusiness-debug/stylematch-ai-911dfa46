@@ -1,17 +1,25 @@
 import { useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Menu, X, Sparkles } from "lucide-react";
+import { Menu, X, Sparkles, LogOut } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 
 export const Navbar = () => {
   const [open, setOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
+  const { user, signOut } = useAuth();
 
   const links = [
     { to: "/", label: "Home" },
     { to: "/generator", label: "Style Generator" },
     { to: "/dashboard", label: "Dashboard" },
   ];
+
+  const handleSignOut = async () => {
+    await signOut();
+    navigate("/");
+  };
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-lg border-b border-border/50">
@@ -42,12 +50,25 @@ export const Navbar = () => {
         </div>
 
         <div className="hidden md:flex items-center gap-3">
-          <Button variant="ghost" size="sm" asChild>
-            <Link to="/login">Log In</Link>
-          </Button>
-          <Button variant="hero" size="sm" asChild>
-            <Link to="/generator">Get Styled</Link>
-          </Button>
+          {user ? (
+            <>
+              <span className="text-sm text-muted-foreground truncate max-w-[150px]">
+                {user.user_metadata?.full_name || user.email}
+              </span>
+              <Button variant="ghost" size="sm" onClick={handleSignOut}>
+                <LogOut className="h-4 w-4 mr-1" /> Log Out
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" asChild>
+                <Link to="/login">Log In</Link>
+              </Button>
+              <Button variant="hero" size="sm" asChild>
+                <Link to="/generator">Get Styled</Link>
+              </Button>
+            </>
+          )}
         </div>
 
         <button
@@ -71,9 +92,17 @@ export const Navbar = () => {
             </Link>
           ))}
           <div className="pt-2 space-y-2">
-            <Button variant="hero" className="w-full" asChild>
-              <Link to="/generator" onClick={() => setOpen(false)}>Get Styled</Link>
-            </Button>
+            {user ? (
+              <Button variant="outline" className="w-full" onClick={() => { handleSignOut(); setOpen(false); }}>
+                <LogOut className="h-4 w-4 mr-1" /> Log Out
+              </Button>
+            ) : (
+              <>
+                <Button variant="hero" className="w-full" asChild>
+                  <Link to="/login" onClick={() => setOpen(false)}>Log In / Sign Up</Link>
+                </Button>
+              </>
+            )}
           </div>
         </div>
       )}

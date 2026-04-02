@@ -24,6 +24,7 @@ export type Database = {
           outfit_name: string
           profile_id: string
           try_on_image_url: string | null
+          user_id: string | null
         }
         Insert: {
           colors?: string[] | null
@@ -34,6 +35,7 @@ export type Database = {
           outfit_name: string
           profile_id: string
           try_on_image_url?: string | null
+          user_id?: string | null
         }
         Update: {
           colors?: string[] | null
@@ -44,6 +46,7 @@ export type Database = {
           outfit_name?: string
           profile_id?: string
           try_on_image_url?: string | null
+          user_id?: string | null
         }
         Relationships: [
           {
@@ -55,6 +58,33 @@ export type Database = {
           },
         ]
       }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          display_name: string | null
+          id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       user_profiles: {
         Row: {
           body_type: string
@@ -65,6 +95,7 @@ export type Database = {
           id: string
           occasion: string
           skin_tone: string | null
+          user_id: string | null
           user_image_url: string | null
         }
         Insert: {
@@ -76,6 +107,7 @@ export type Database = {
           id?: string
           occasion: string
           skin_tone?: string | null
+          user_id?: string | null
           user_image_url?: string | null
         }
         Update: {
@@ -87,6 +119,7 @@ export type Database = {
           id?: string
           occasion?: string
           skin_tone?: string | null
+          user_id?: string | null
           user_image_url?: string | null
         }
         Relationships: []
