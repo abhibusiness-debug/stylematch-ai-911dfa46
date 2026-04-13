@@ -12,9 +12,9 @@ serve(async (req) => {
   }
 
   try {
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    if (!GEMINI_API_KEY) {
+      throw new Error("GEMINI_API_KEY is not configured");
     }
 
     const { gender, height, bodyType, skinTone, hairstyle, occasion } = await req.json();
@@ -28,7 +28,7 @@ serve(async (req) => {
 
     const systemPrompt = `You are an expert AI fashion stylist specializing in BUDGET-FRIENDLY fashion in India. Generate exactly 3 complete outfit recommendations as a JSON array. Each outfit must be tailored to the user's physical attributes and occasion.
 
-IMPORTANT: You must respond with ONLY a valid JSON array, no markdown, no explanation.
+IMPORTANT: You must respond with ONLY a valid JSON object with an "outfits" key containing the array, no markdown, no explanation.
 
 CRITICAL PRICING RULES:
 - Total outfit cost must be UNDER ₹3,000
@@ -41,6 +41,7 @@ Each outfit object must have this exact structure:
   "name": "Outfit Name (creative, 2-3 words)",
   "occasion": "The occasion category",
   "colors": ["#hex1", "#hex2", "#hex3"],
+  "fullOutfitDescription": "Complete description of the full outfit including top, bottom, shoes for virtual try-on rendering",
   "items": [
     {
       "name": "Specific item name with color/material",
@@ -59,8 +60,7 @@ Rules:
 - Styles must flatter the user's body type
 - ALL prices must be budget-friendly (₹200-₹1,200 per item)
 - Brand names must be real affordable Indian brands
-- The 3 outfits should offer variety (e.g., one dressy, one casual, one trendy)
-- Include a complete outfit description field for virtual try-on`;
+- The 3 outfits should offer variety (e.g., one dressy, one casual, one trendy)`;
 
     const userPrompt = `Generate 3 BUDGET-FRIENDLY personalized outfit recommendations for:
 - Gender: ${gender}
@@ -71,100 +71,50 @@ Rules:
 - Occasion: ${occasion}
 
 IMPORTANT: Keep all items affordable (₹200-₹1,200 each, total under ₹3,000).
-Focus on Flipkart and Myntra available brands.`;
+Focus on Flipkart and Myntra available brands.
+Respond with ONLY valid JSON: {"outfits": [...]}`;
 
     console.log("Generating budget outfits for:", { gender, bodyType, skinTone, occasion });
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "return_outfits",
-              description: "Return the generated outfit recommendations",
-              parameters: {
-                type: "object",
-                properties: {
-                  outfits: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        name: { type: "string" },
-                        occasion: { type: "string" },
-                        colors: { type: "array", items: { type: "string" } },
-                        fullOutfitDescription: { type: "string", description: "Complete description of the full outfit including top, bottom, shoes for virtual try-on rendering" },
-                        items: {
-                          type: "array",
-                          items: {
-                            type: "object",
-                            properties: {
-                              name: { type: "string" },
-                              brand: { type: "string" },
-                              price: { type: "string" },
-                              category: { type: "string" },
-                              searchQueryFlipkart: { type: "string" },
-                              searchQueryMyntra: { type: "string" },
-                            },
-                            required: ["name", "brand", "price", "category", "searchQueryFlipkart", "searchQueryMyntra"],
-                            additionalProperties: false,
-                          },
-                        },
-                      },
-                      required: ["name", "occasion", "colors", "fullOutfitDescription", "items"],
-                      additionalProperties: false,
-                    },
-                  },
-                },
-                required: ["outfits"],
-                additionalProperties: false,
-              },
-            },
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            { role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] },
+          ],
+          generationConfig: {
+            responseMimeType: "application/json",
           },
-        ],
-        tool_choice: { type: "function", function: { name: "return_outfits" } },
-      }),
-    });
+        }),
+      }
+    );
 
     if (!response.ok) {
+      const errText = await response.text();
+      console.error("Gemini API error:", response.status, errText);
       if (response.status === 429) {
         return new Response(JSON.stringify({ error: "AI rate limit reached. Please try again in a moment." }), {
           status: 429,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      if (response.status === 402) {
-        return new Response(JSON.stringify({ error: "AI credits exhausted. Please try again later." }), {
-          status: 402,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      const errText = await response.text();
-      console.error("AI gateway error:", response.status, errText);
-      throw new Error(`AI gateway error: ${response.status}`);
+      throw new Error(`Gemini API error: ${response.status}`);
     }
 
     const aiData = await response.json();
-    console.log("AI response received");
+    console.log("Gemini response received");
 
-    const toolCall = aiData.choices?.[0]?.message?.tool_calls?.[0];
-    if (!toolCall?.function?.arguments) {
-      throw new Error("No structured output from AI");
+    const textContent = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!textContent) {
+      console.error("No text in Gemini response:", JSON.stringify(aiData).substring(0, 500));
+      throw new Error("No response from AI");
     }
 
-    const parsed = JSON.parse(toolCall.function.arguments);
-    const outfits = parsed.outfits;
+    const parsed = JSON.parse(textContent);
+    const outfits = parsed.outfits || parsed;
 
     if (!Array.isArray(outfits) || outfits.length === 0) {
       throw new Error("AI returned no outfits");
