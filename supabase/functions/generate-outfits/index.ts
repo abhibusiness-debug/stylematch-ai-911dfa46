@@ -6,6 +6,117 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
+const TEXT_MODELS = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"];
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 503]);
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const jsonResponse = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: jsonHeaders });
+
+const extractTextResponse = (payload: any) => {
+  const parts = payload?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) return null;
+
+  const text = parts
+    .map((part: any) => (typeof part?.text === "string" ? part.text : ""))
+    .join("")
+    .trim();
+
+  return text || null;
+};
+
+const parseOutfits = (rawText: string) => {
+  const trimmed = rawText.trim();
+  const jsonCandidate = trimmed.match(/\{[\s\S]*\}|\[[\s\S]*\]/)?.[0] ?? trimmed;
+  const parsed = JSON.parse(jsonCandidate);
+  const outfits = Array.isArray(parsed) ? parsed : parsed?.outfits;
+
+  if (!Array.isArray(outfits) || outfits.length === 0) {
+    throw new Error("AI returned no outfits");
+  }
+
+  return outfits.map((outfit: any, index: number) => ({
+    id: index + 1,
+    name: typeof outfit?.name === "string" && outfit.name.trim() ? outfit.name.trim() : `Look ${index + 1}`,
+    occasion: typeof outfit?.occasion === "string" && outfit.occasion.trim() ? outfit.occasion.trim() : "Custom",
+    colors: Array.isArray(outfit?.colors) ? outfit.colors.filter((color: unknown) => typeof color === "string") : [],
+    fullOutfitDescription:
+      typeof outfit?.fullOutfitDescription === "string" ? outfit.fullOutfitDescription.trim() : "",
+    items: Array.isArray(outfit?.items)
+      ? outfit.items.map((item: any) => ({
+          name: typeof item?.name === "string" ? item.name : "Style piece",
+          brand: typeof item?.brand === "string" ? item.brand : "Budget brand",
+          price: typeof item?.price === "string" ? item.price : "₹999",
+          category: typeof item?.category === "string" ? item.category : "Accessories",
+          searchQueryFlipkart:
+            typeof item?.searchQueryFlipkart === "string" && item.searchQueryFlipkart.trim()
+              ? item.searchQueryFlipkart
+              : typeof item?.name === "string"
+              ? item.name
+              : "fashion item",
+          searchQueryMyntra:
+            typeof item?.searchQueryMyntra === "string" && item.searchQueryMyntra.trim()
+              ? item.searchQueryMyntra
+              : typeof item?.name === "string"
+              ? item.name
+              : "fashion item",
+        }))
+      : [],
+  }));
+};
+
+const callGeminiWithFallback = async (apiKey: string, prompt: string) => {
+  const failures: string[] = [];
+
+  for (const model of TEXT_MODELS) {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: {
+              responseMimeType: "application/json",
+            },
+          }),
+        },
+      );
+
+      const rawBody = await response.text();
+
+      if (response.ok) {
+        const payload = JSON.parse(rawBody);
+        const text = extractTextResponse(payload);
+
+        if (text) {
+          return { model, text };
+        }
+
+        failures.push(`${model} returned an empty response`);
+        break;
+      }
+
+      failures.push(`${model} attempt ${attempt} failed with ${response.status}: ${rawBody.slice(0, 300)}`);
+
+      if (!RETRYABLE_STATUS_CODES.has(response.status) || attempt === 3) {
+        break;
+      }
+
+      await sleep(600 * 2 ** (attempt - 1));
+    }
+  }
+
+  throw new Error(
+    failures[failures.length - 1]?.includes("503")
+      ? "Gemini is busy right now. Please retry in a moment."
+      : failures[failures.length - 1] || "Unable to generate outfits right now.",
+  );
+};
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -20,10 +131,7 @@ serve(async (req) => {
     const { gender, height, bodyType, skinTone, hairstyle, occasion } = await req.json();
 
     if (!gender || !bodyType || !occasion) {
-      return new Response(
-        JSON.stringify({ error: "Gender, body type, and occasion are required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return jsonResponse({ error: "Gender, body type, and occasion are required" }, 400);
     }
 
     const systemPrompt = `You are an expert AI fashion stylist specializing in BUDGET-FRIENDLY fashion in India. Generate exactly 3 complete outfit recommendations as a JSON array. Each outfit must be tailored to the user's physical attributes and occasion.
@@ -76,66 +184,16 @@ Respond with ONLY valid JSON: {"outfits": [...]}`;
 
     console.log("Generating budget outfits for:", { gender, bodyType, skinTone, occasion });
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [
-            { role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] },
-          ],
-          generationConfig: {
-            responseMimeType: "application/json",
-          },
-        }),
-      }
-    );
+    const prompt = `${systemPrompt}\n\n${userPrompt}`;
+    const { model, text } = await callGeminiWithFallback(GEMINI_API_KEY, prompt);
+    const outfitsWithIds = parseOutfits(text);
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error("Gemini API error:", response.status, errText);
-      if (response.status === 429) {
-        return new Response(JSON.stringify({ error: "AI rate limit reached. Please try again in a moment." }), {
-          status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      throw new Error(`Gemini API error: ${response.status}`);
-    }
+    console.log(`Generated ${outfitsWithIds.length} budget outfits successfully with ${model}`);
 
-    const aiData = await response.json();
-    console.log("Gemini response received");
-
-    const textContent = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!textContent) {
-      console.error("No text in Gemini response:", JSON.stringify(aiData).substring(0, 500));
-      throw new Error("No response from AI");
-    }
-
-    const parsed = JSON.parse(textContent);
-    const outfits = parsed.outfits || parsed;
-
-    if (!Array.isArray(outfits) || outfits.length === 0) {
-      throw new Error("AI returned no outfits");
-    }
-
-    const outfitsWithIds = outfits.map((o: any, i: number) => ({
-      ...o,
-      id: i + 1,
-    }));
-
-    console.log(`Generated ${outfitsWithIds.length} budget outfits successfully`);
-
-    return new Response(JSON.stringify({ outfits: outfitsWithIds }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResponse({ outfits: outfitsWithIds });
   } catch (error: unknown) {
     console.error("Outfit generation error:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
-    return new Response(JSON.stringify({ error: message }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResponse({ error: message }, message.includes("busy") ? 503 : 500);
   }
 });

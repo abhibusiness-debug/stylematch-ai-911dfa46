@@ -59,7 +59,7 @@ const PIPELINE_STEPS = [
 
 const Results = () => {
   const location = useLocation();
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const formData = location.state?.form;
   const userImage = location.state?.imagePreview;
 
@@ -78,6 +78,30 @@ const Results = () => {
 
   const getMyntraUrl = (query: string) =>
     `https://www.myntra.com/${encodeURIComponent(query.replace(/\s+/g, '-'))}`;
+
+  const callEdgeFunction = async <T,>(functionName: string, body: Record<string, unknown>) => {
+    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${functionName}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      throw new Error(payload?.error || `Failed to run ${functionName}`);
+    }
+
+    if (payload?.error) {
+      throw new Error(payload.error);
+    }
+
+    return payload as T;
+  };
 
   // Full pipeline
   useEffect(() => {
@@ -122,12 +146,7 @@ const Results = () => {
 
         // --- Stage 2: Generate outfits ---
         setStage("generating-outfits");
-        const { data: outfitData, error: outfitErr } = await supabase.functions.invoke(
-          "generate-outfits",
-          { body: formData }
-        );
-        if (outfitErr) throw outfitErr;
-        if (outfitData?.error) throw new Error(outfitData.error);
+        const outfitData = await callEdgeFunction<{ outfits: Outfit[] }>("generate-outfits", formData);
         const generated: Outfit[] = outfitData?.outfits;
         if (!Array.isArray(generated) || generated.length === 0)
           throw new Error("No outfits generated");
@@ -144,17 +163,13 @@ const Results = () => {
             outfit.items.map(item => `${item.name} (${item.category})`).join(", ");
 
           try {
-            const { data, error } = await supabase.functions.invoke(
-              "generate-clothing-image",
-              {
-                body: {
-                  description: fullDescription,
-                  outfitId: outfit.id,
-                  itemIndex: 0,
-                },
-              }
-            );
-            if (!error && data?.imageUrl) {
+            const data = await callEdgeFunction<{ imageUrl?: string }>("generate-clothing-image", {
+              description: fullDescription,
+              outfitId: outfit.id,
+              itemIndex: 0,
+            });
+
+            if (data?.imageUrl) {
               updatedOutfits[oi] = {
                 ...updatedOutfits[oi],
                 items: updatedOutfits[oi].items.map((item, ii) =>
@@ -179,13 +194,12 @@ const Results = () => {
           if (!itemWithImage?.generatedImageUrl) return;
 
           try {
-            const { data, error } = await supabase.functions.invoke("virtual-tryon", {
-              body: {
-                imageUrl: uploadedUserUrl,
-                styleImageUrl: itemWithImage.generatedImageUrl,
-              },
+            const data = await callEdgeFunction<{ result?: { output?: string | Array<string | { url?: string }> | { url?: string } } }>("virtual-tryon", {
+              imageUrl: uploadedUserUrl,
+              styleImageUrl: itemWithImage.generatedImageUrl,
             });
-            if (!error && data) {
+
+            if (data) {
               const outputUrl =
                 data?.result?.output ||
                 data?.result?.output?.[0]?.url ||
