@@ -24,25 +24,53 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let isMounted = true;
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
+        if (!isMounted) return;
         setSession(session);
         setUser(session?.user ?? null);
         setLoading(false);
       }
     );
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
+    supabase.auth.getSession()
+      .then(({ data: { session }, error }) => {
+        if (!isMounted) return;
 
-    return () => subscription.unsubscribe();
+        if (error) {
+          console.error("Failed to restore auth session", error);
+          setSession(null);
+          setUser(null);
+          void supabase.auth.signOut({ scope: "local" });
+          setLoading(false);
+          return;
+        }
+
+        setSession(session);
+        setUser(session?.user ?? null);
+        setLoading(false);
+      })
+      .catch((error) => {
+        if (!isMounted) return;
+        console.error("Failed to restore auth session", error);
+        setSession(null);
+        setUser(null);
+        void supabase.auth.signOut({ scope: "local" });
+        setLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    setSession(null);
+    setUser(null);
+    await supabase.auth.signOut({ scope: "local" });
   };
 
   return (
