@@ -9,7 +9,7 @@ const corsHeaders = {
 
 const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
 const GEMINI_IMAGE_MODELS = ["gemini-2.5-flash-image", "gemini-3.1-flash-image-preview"];
-const LOVABLE_IMAGE_MODELS = ["google/gemini-2.5-flash-image", "google/gemini-3.1-flash-image-preview"];
+const LOVABLE_IMAGE_MODELS = ["google/gemini-3-pro-image-preview", "google/gemini-3.1-flash-image-preview", "google/gemini-2.5-flash-image"];
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 503]);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
