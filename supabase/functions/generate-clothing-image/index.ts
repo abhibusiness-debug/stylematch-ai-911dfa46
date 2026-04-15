@@ -8,7 +8,8 @@ const corsHeaders = {
 };
 
 const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
-const IMAGE_MODELS = ["gemini-2.5-flash-image", "gemini-3.1-flash-image-preview"];
+const GEMINI_IMAGE_MODELS = ["gemini-2.5-flash-image", "gemini-3.1-flash-image-preview"];
+const LOVABLE_IMAGE_MODELS = ["google/gemini-2.5-flash-image", "google/gemini-3.1-flash-image-preview"];
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 503]);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -58,10 +59,17 @@ const extractInlineImage = (
   return null;
 };
 
-const callGeminiImageModel = async (apiKey: string, description: string) => {
-  const failures: string[] = [];
+const buildImagePrompt = (description: string) =>
+  `Create a realistic front-view full outfit reference image for virtual try-on. ` +
+  `Show the complete look described here: ${description}. ` +
+  `Include top, bottom, footwear, and accessories as one coordinated outfit. ` +
+  `Use a plain white studio background, full-body composition, catalog quality, no props, no text.`;
 
-  for (const model of IMAGE_MODELS) {
+const callGeminiDirectImageModel = async (apiKey: string, description: string) => {
+  const failures: string[] = [];
+  const prompt = buildImagePrompt(description);
+
+  for (const model of GEMINI_IMAGE_MODELS) {
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
@@ -72,15 +80,7 @@ const callGeminiImageModel = async (apiKey: string, description: string) => {
             contents: [
               {
                 role: "user",
-                parts: [
-                  {
-                    text:
-                      `Create a realistic front-view full outfit reference image for virtual try-on. ` +
-                      `Show the complete look described here: ${description}. ` +
-                      `Include top, bottom, footwear, and accessories as one coordinated outfit. ` +
-                      `Use a plain white studio background, full-body composition, catalog quality, no props, no text.`,
-                  },
-                ],
+                parts: [{ text: prompt }],
               },
             ],
             generationConfig: {
@@ -115,10 +115,59 @@ const callGeminiImageModel = async (apiKey: string, description: string) => {
   }
 
   throw new Error(
-    failures[failures.length - 1]?.includes("503")
-      ? "Gemini image generation is busy right now. Please retry in a moment."
-      : failures[failures.length - 1] || "Unable to generate outfit image right now.",
+    failures[failures.length - 1] || "Gemini direct image generation failed",
   );
+};
+
+const callLovableGatewayImageModel = async (lovableKey: string, description: string) => {
+  const failures: string[] = [];
+  const prompt = buildImagePrompt(description);
+
+  for (const model of LOVABLE_IMAGE_MODELS) {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${lovableKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+
+      const rawBody = await response.text();
+
+      if (response.ok) {
+        const payload = JSON.parse(rawBody);
+        const image = extractInlineImage(payload);
+
+        if (image) {
+          return { model, image };
+        }
+
+        // Check if there's a base64 image in the response choices
+        const choices = payload?.choices;
+        if (Array.isArray(choices)) {
+          for (const choice of choices) {
+            const img = extractInlineImage(choice);
+            if (img) return { model, image: img };
+          }
+        }
+
+        failures.push(`${model} (gateway) returned no image data`);
+        break;
+      }
+
+      failures.push(`${model} (gateway) attempt ${attempt} failed: ${response.status}`);
+
+      if (!RETRYABLE_STATUS_CODES.has(response.status) || attempt === 2) break;
+      await sleep(1000);
+    }
+  }
+
+  throw new Error(failures[failures.length - 1] || "Lovable AI image generation failed");
 };
 
 serve(async (req) => {
@@ -128,7 +177,11 @@ serve(async (req) => {
 
   try {
     const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-    if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+
+    if (!GEMINI_API_KEY && !LOVABLE_API_KEY) {
+      throw new Error("No AI API key is configured for image generation");
+    }
 
     const { description, outfitId, itemIndex } = await req.json();
     if (!description) {
@@ -137,7 +190,31 @@ serve(async (req) => {
 
     console.log("Generating clothing image for:", description);
 
-    const { model, image } = await callGeminiImageModel(GEMINI_API_KEY, description);
+    let result: { model: string; image: { data: string; mimeType: string } } | null = null;
+
+    // Try Gemini direct first
+    if (GEMINI_API_KEY) {
+      try {
+        result = await callGeminiDirectImageModel(GEMINI_API_KEY, description);
+      } catch (e) {
+        console.warn("Gemini direct image gen failed, trying Lovable AI fallback:", (e as Error).message);
+      }
+    }
+
+    // Fallback to Lovable AI Gateway
+    if (!result && LOVABLE_API_KEY) {
+      try {
+        result = await callLovableGatewayImageModel(LOVABLE_API_KEY, description);
+      } catch (e) {
+        console.error("Lovable AI image gen also failed:", (e as Error).message);
+      }
+    }
+
+    if (!result) {
+      throw new Error("All image generation methods failed. Please try again later.");
+    }
+
+    const { model, image } = result;
 
     const ext = image.mimeType.includes("jpeg") || image.mimeType.includes("jpg") ? "jpg" : "png";
     const bytes = Uint8Array.from(atob(image.data), (c) => c.charCodeAt(0));
