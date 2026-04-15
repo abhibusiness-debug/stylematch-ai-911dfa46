@@ -9,7 +9,6 @@ const corsHeaders = {
 
 const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
 const GEMINI_IMAGE_MODELS = ["gemini-2.5-flash-image", "gemini-3.1-flash-image-preview"];
-const LOVABLE_IMAGE_MODELS = ["google/gemini-3-pro-image-preview", "google/gemini-3.1-flash-image-preview", "google/gemini-2.5-flash-image"];
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 503]);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -19,12 +18,8 @@ const jsonResponse = (body: unknown, status = 200) =>
 
 const extractInlineImage = (
   node: unknown,
-): {
-  data: string;
-  mimeType: string;
-} | null => {
+): { data: string; mimeType: string } | null => {
   if (!node) return null;
-
   if (Array.isArray(node)) {
     for (const item of node) {
       const found = extractInlineImage(item);
@@ -32,30 +27,21 @@ const extractInlineImage = (
     }
     return null;
   }
-
   if (typeof node !== "object") return null;
-
   const record = node as Record<string, unknown>;
   const inlineData = record.inlineData ?? record.inline_data;
-
   if (inlineData && typeof inlineData === "object") {
     const imageRecord = inlineData as Record<string, unknown>;
     const data = imageRecord.data;
     const mimeType = imageRecord.mimeType ?? imageRecord.mime_type;
-
     if (typeof data === "string" && data.length > 0) {
-      return {
-        data,
-        mimeType: typeof mimeType === "string" ? mimeType : "image/png",
-      };
+      return { data, mimeType: typeof mimeType === "string" ? mimeType : "image/png" };
     }
   }
-
   for (const value of Object.values(record)) {
     const found = extractInlineImage(value);
     if (found) return found;
   }
-
   return null;
 };
 
@@ -65,27 +51,21 @@ const buildImagePrompt = (description: string) =>
   `Include top, bottom, footwear, and accessories as one coordinated outfit. ` +
   `Use a plain white studio background, full-body composition, catalog quality, no props, no text.`;
 
+// Method 1: Direct Gemini image generation (requires paid key)
 const callGeminiDirectImageModel = async (apiKey: string, description: string) => {
   const failures: string[] = [];
   const prompt = buildImagePrompt(description);
 
   for (const model of GEMINI_IMAGE_MODELS) {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            contents: [
-              {
-                role: "user",
-                parts: [{ text: prompt }],
-              },
-            ],
-            generationConfig: {
-              responseModalities: ["TEXT", "IMAGE"],
-            },
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
           }),
         },
       );
@@ -95,79 +75,42 @@ const callGeminiDirectImageModel = async (apiKey: string, description: string) =
       if (response.ok) {
         const payload = JSON.parse(rawBody);
         const image = extractInlineImage(payload);
-
-        if (image) {
-          return { model, image };
-        }
-
+        if (image) return { model, image };
         failures.push(`${model} returned no image data`);
         break;
       }
 
-      failures.push(`${model} attempt ${attempt} failed with ${response.status}: ${rawBody.slice(0, 300)}`);
-
-      if (!RETRYABLE_STATUS_CODES.has(response.status) || attempt === 3) {
-        break;
-      }
-
+      failures.push(`${model} attempt ${attempt}: ${response.status}`);
+      if (!RETRYABLE_STATUS_CODES.has(response.status) || attempt === 2) break;
       await sleep(600 * 2 ** (attempt - 1));
     }
   }
 
-  throw new Error(
-    failures[failures.length - 1] || "Gemini direct image generation failed",
-  );
+  throw new Error(failures[failures.length - 1] || "Gemini image gen failed");
 };
 
-const callLovableGatewayImageModel = async (lovableKey: string, description: string) => {
-  const failures: string[] = [];
-  const prompt = buildImagePrompt(description);
-
-  for (const model of LOVABLE_IMAGE_MODELS) {
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${lovableKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-
-      const rawBody = await response.text();
-
-      if (response.ok) {
-        const payload = JSON.parse(rawBody);
-        const image = extractInlineImage(payload);
-
-        if (image) {
-          return { model, image };
-        }
-
-        // Check if there's a base64 image in the response choices
-        const choices = payload?.choices;
-        if (Array.isArray(choices)) {
-          for (const choice of choices) {
-            const img = extractInlineImage(choice);
-            if (img) return { model, image: img };
-          }
-        }
-
-        failures.push(`${model} (gateway) returned no image data`);
-        break;
-      }
-
-      failures.push(`${model} (gateway) attempt ${attempt} failed: ${response.status}`);
-
-      if (!RETRYABLE_STATUS_CODES.has(response.status) || attempt === 2) break;
-      await sleep(1000);
-    }
+// Method 2: Free Pollinations.ai image generation (no API key needed)
+const callPollinationsImage = async (description: string): Promise<Uint8Array> => {
+  const prompt = encodeURIComponent(
+    `Fashion catalog photo, front view, full outfit on plain white background: ${description}. Professional studio lighting, high quality.`
+  );
+  const url = `https://image.pollinations.ai/prompt/${prompt}?width=512&height=768&nologo=true&seed=${Date.now()}`;
+  
+  console.log("Calling Pollinations.ai for image generation");
+  
+  const response = await fetch(url, { redirect: "follow" });
+  
+  if (!response.ok) {
+    throw new Error(`Pollinations failed: ${response.status}`);
   }
-
-  throw new Error(failures[failures.length - 1] || "Lovable AI image generation failed");
+  
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("image")) {
+    throw new Error(`Pollinations returned non-image: ${contentType}`);
+  }
+  
+  const arrayBuffer = await response.arrayBuffer();
+  return new Uint8Array(arrayBuffer);
 };
 
 serve(async (req) => {
@@ -177,56 +120,54 @@ serve(async (req) => {
 
   try {
     const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-
-    if (!GEMINI_API_KEY && !LOVABLE_API_KEY) {
-      throw new Error("No AI API key is configured for image generation");
-    }
 
     const { description, outfitId, itemIndex } = await req.json();
     if (!description) {
       return jsonResponse({ error: "Description is required" }, 400);
     }
 
-    console.log("Generating clothing image for:", description);
-
-    let result: { model: string; image: { data: string; mimeType: string } } | null = null;
-
-    // Try Gemini direct first
-    if (GEMINI_API_KEY) {
-      try {
-        result = await callGeminiDirectImageModel(GEMINI_API_KEY, description);
-      } catch (e) {
-        console.warn("Gemini direct image gen failed, trying Lovable AI fallback:", (e as Error).message);
-      }
-    }
-
-    // Fallback to Lovable AI Gateway
-    if (!result && LOVABLE_API_KEY) {
-      try {
-        result = await callLovableGatewayImageModel(LOVABLE_API_KEY, description);
-      } catch (e) {
-        console.error("Lovable AI image gen also failed:", (e as Error).message);
-      }
-    }
-
-    if (!result) {
-      throw new Error("All image generation methods failed. Please try again later.");
-    }
-
-    const { model, image } = result;
-
-    const ext = image.mimeType.includes("jpeg") || image.mimeType.includes("jpg") ? "jpg" : "png";
-    const bytes = Uint8Array.from(atob(image.data), (c) => c.charCodeAt(0));
+    console.log("Generating clothing image for:", description.substring(0, 120));
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
+    let imageBytes: Uint8Array | null = null;
+    let mimeType = "image/png";
+    let usedModel = "unknown";
+
+    // Try Gemini direct first (works with paid keys)
+    if (GEMINI_API_KEY) {
+      try {
+        const result = await callGeminiDirectImageModel(GEMINI_API_KEY, description);
+        imageBytes = Uint8Array.from(atob(result.image.data), (c) => c.charCodeAt(0));
+        mimeType = result.image.mimeType;
+        usedModel = result.model;
+      } catch (e) {
+        console.warn("Gemini image gen failed:", (e as Error).message);
+      }
+    }
+
+    // Fallback: Pollinations.ai (free, no key needed)
+    if (!imageBytes) {
+      try {
+        imageBytes = await callPollinationsImage(description);
+        mimeType = "image/jpeg";
+        usedModel = "pollinations.ai";
+      } catch (e) {
+        console.error("Pollinations also failed:", (e as Error).message);
+      }
+    }
+
+    if (!imageBytes) {
+      throw new Error("All image generation methods failed. Please try again later.");
+    }
+
+    const ext = mimeType.includes("jpeg") || mimeType.includes("jpg") ? "jpg" : "png";
     const fileName = `clothing-${outfitId ?? "x"}-${itemIndex ?? 0}-${Date.now()}.${ext}`;
     const { data: uploadData, error: uploadError } = await supabase.storage
       .from("user-images")
-      .upload(fileName, bytes, { contentType: image.mimeType, upsert: true });
+      .upload(fileName, imageBytes, { contentType: mimeType, upsert: true });
 
     if (uploadError) {
       console.error("Upload error:", uploadError);
@@ -234,8 +175,7 @@ serve(async (req) => {
     }
 
     const { data: urlData } = supabase.storage.from("user-images").getPublicUrl(uploadData.path);
-
-    console.log(`Generated clothing image with ${model}:`, urlData.publicUrl);
+    console.log(`Generated clothing image with ${usedModel}:`, urlData.publicUrl);
 
     return jsonResponse({ imageUrl: urlData.publicUrl });
   } catch (error: unknown) {

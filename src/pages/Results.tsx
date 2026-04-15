@@ -200,11 +200,16 @@ const Results = () => {
             });
 
             if (data) {
-              const outputUrl =
-                data?.result?.output ||
-                data?.result?.output?.[0]?.url ||
-                data?.result?.output?.[0] ||
-                "";
+              let outputUrl = "";
+              const out = data?.result?.output;
+              if (typeof out === "string" && out.startsWith("http")) {
+                outputUrl = out;
+              } else if (Array.isArray(out)) {
+                const first = out[0];
+                outputUrl = typeof first === "string" ? first : (first as any)?.url || "";
+              } else if (out && typeof out === "object") {
+                outputUrl = (out as any)?.url || "";
+              }
               if (outputUrl) {
                 setTryOnImages((prev) => ({ ...prev, [outfit.id]: outputUrl }));
 
