@@ -229,6 +229,24 @@ const Results = () => {
         });
 
         await Promise.all(tryOnPromises);
+
+        // Save any outfits that didn't get a try-on image
+        for (const outfit of updatedOutfits) {
+          if (!tryOnImages[outfit.id] && profileData?.id) {
+            try {
+              await supabase.from("generated_outfits").insert({
+                profile_id: profileData.id,
+                user_id: user?.id,
+                outfit_name: outfit.name,
+                occasion: outfit.occasion,
+                colors: outfit.colors,
+                items: outfit.items as any,
+                try_on_image_url: null,
+              });
+            } catch {}
+          }
+        }
+
         setProgress(100);
         setStage("done");
       } catch (err: unknown) {
